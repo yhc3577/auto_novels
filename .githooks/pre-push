@@ -1,19 +1,18 @@
 #!/usr/bin/env bash
-# pre-push hook — 阻止从本地 main 直接 push 到 origin/main
+# pre-push hook — 禁止任何 git push 到 origin/main
 #
 # 工作流约定：
 #   - 默认开发分支：dev
-#   - 日常 push：git push       (origin/dev)
-#   - main 分支：仅在显式 PR / merge 时更新
-#     例外：本地 main 与 origin/main SHA 相同（fast-forward noop）
-#     例外：显式 `git push origin dev:main`（在任意分支运行）允许通过
+#   - 日常 push：git push       (推到 origin/dev)
+#   - main 分支：只在 GitHub 网页通过 PR / merge 更新
+#     本仓库的 git push 一律禁止推到 origin/main
+#     （包括 dev:main 的 refspec；如确需可临时 git push --no-verify）
 #
 # 激活：git config core.hooksPath .githooks
 
 set -e
 
 protected_branch='main'
-current_branch=$(git symbolic-ref HEAD 2>/dev/null | sed 's|^refs/heads/||' || echo "")
 
 while read -r local_ref local_sha remote_ref remote_sha; do
     # 只关心 main 分支
@@ -21,27 +20,27 @@ while read -r local_ref local_sha remote_ref remote_sha; do
         continue
     fi
 
-    # 同 SHA fast-forward：noop，允许
+    # 同 SHA fast-forward：noop，允许（避免新 clone 后 push 报错）
     if [ "$local_sha" = "$remote_sha" ]; then
         continue
     fi
 
-    # 当前在 main 分支 → 阻止
-    if [ "$current_branch" = "$protected_branch" ]; then
-        echo "❌ 禁止从本地 main 直接 push 到 origin/main"
-        echo ""
-        echo "约定：代码改动只推 origin/dev，main 由显式 PR/merge 更新。"
-        echo ""
-        echo "正确做法："
-        echo "  git checkout dev"
-        echo "  git push              # 推到 origin/dev"
-        echo ""
-        echo "如确需把 dev 合并到 main（绕过 PR）："
-        echo "  git push origin dev:main"
-        exit 1
-    fi
-
-    # 显式 refspec push（如 dev:main） → 允许
+    echo "❌ 禁止 push 到 origin/$protected_branch"
+    echo ""
+    echo "约定：代码改动只推 origin/dev，main 由 GitHub PR/merge 更新。"
+    echo ""
+    echo "你刚才尝试："
+    echo "  local : $local_ref  ($local_sha)"
+    echo "  remote: $remote_ref ($remote_sha)"
+    echo ""
+    echo "正确做法（在 dev 分支开发）："
+    echo "  git checkout dev"
+    echo "  git push              # → origin/dev"
+    echo ""
+    echo "需要更新 main 时："
+    echo "  - 推荐：开 PR 让 dev → main（GitHub 网页操作）"
+    echo "  - 或：临时禁用本 hook（git push --no-verify）"
+    exit 1
 done
 
 exit 0
