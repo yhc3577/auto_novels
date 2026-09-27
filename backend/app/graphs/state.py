@@ -90,6 +90,14 @@ class StoryState(TypedDict, total=False):
 
     # ----- write 长篇 专用 -----
     recall: dict
+    chapter_outline: dict                       # chapter_design 产出
+    pre_write_validation_report: dict           # pre_write_validate 产出
+    post_write_check_report: dict               # post_write_check 产出（含 normalized_prose）
+    consistency_report: dict                    # prose_consistency (LLM) 产出
+    pre_write_retry_count: int                  # pre_write 循环计数
+    design_iteration: int                       # chapter_design → write_prose 循环计数
+    interrupt_pending: bool                     # 是否需要人工审核
+    interrupt_reason: str | None                # 人工审核原因
     quality_report: dict
     chapter_hook: str
     summary_text: str

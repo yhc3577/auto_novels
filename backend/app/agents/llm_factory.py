@@ -37,6 +37,11 @@ class MockChatModel(BaseChatModel):
 
     role_payloads: dict[str, str]
 
+    @property
+    def _llm_type(self) -> str:
+        # langchain-core 0.3+ 要求子类实现 _llm_type
+        return "mock"
+
     def _generate(self, messages, stop=None, **kwargs):  # pragma: no cover - sync API
         raise NotImplementedError("MockChatModel is async-only")
 
@@ -51,7 +56,9 @@ class MockChatModel(BaseChatModel):
                 break
 
         payload = self.role_payloads.get(role) or self.role_payloads.get("default", "")
-        return AIMessage(content=payload)
+        # langchain 1.x 要求返回 ChatResult，包含 .generations: list[ChatGeneration]
+        from langchain_core.outputs import ChatGeneration, ChatResult
+        return ChatResult(generations=[ChatGeneration(message=AIMessage(content=payload))])
 
 
 def _default_payloads() -> dict[str, str]:
@@ -85,6 +92,30 @@ def _default_payloads() -> dict[str, str]:
             "1. 雾港题材可继续深挖，建议加入更多地点细节\n"
             "2. 短篇窗口期可考虑同步发布\n"
             "3. 钩子密度可参考 TOP3 同类作品的第 1 章结尾"
+        ),
+        "chapter_designer": (
+            "{"
+            "\"opening_hook\": \"雨夜的雾港站台，江禾提着黑色皮箱走出列车。\","
+            "\"key_beats\": ["
+            "\"抵达雾港，撞见导师失踪前信中提到的银环女子\","
+            "\"前往旧公寓，发现导师留下的加密手稿\","
+            "\"与神秘势力第一次正面交锋，付出代价\""
+            "],"
+            "\"conflict\": \"追寻导师失踪真相 vs 雾港暗中势力的阻挠\","
+            "\"climax\": \"旧公寓中的手稿被截获，江禾负伤\","
+            "\"closing_hook\": \"银环女子留下半枚钥匙和一句话：'别去港区码头'。\","
+            "\"characters_in_scene\": [\"江禾\", \"银环女子\", \"雾港暗哨\"],"
+            "\"location\": \"雾港旧城 · 旧公寓\","
+            "\"pov\": \"江禾\""
+            "}"
+        ),
+        "prose_consistency": (
+            "{"
+            "\"deviation_score\": 0.0,"
+            "\"severity\": \"low\","
+            "\"issues\": [],"
+            "\"recommendation\": \"pass\""
+            "}"
         ),
         "default": "（mock LLM: 没有匹配 [role] 标签，返回默认空响应）",
     }
