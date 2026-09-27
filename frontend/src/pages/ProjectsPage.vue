@@ -98,8 +98,9 @@ onMounted(refresh)
             <td>{{ p.title }}</td>
             <td>{{ p.genre ?? '—' }}</td>
             <td>{{ p.chapter_count }}</td>
-            <td>
-              <RouterLink :to="{ name: 'write', params: { id: p.id } }">写章节 →</RouterLink>
+            <td class="actions">
+              <RouterLink :to="{ name: 'write', params: { id: p.id } }">写长篇 →</RouterLink>
+              <RouterLink :to="{ name: 'intent', params: { id: p.id } }">意图识别 →</RouterLink>
             </td>
           </tr>
         </tbody>
@@ -173,6 +174,11 @@ th, td {
   text-align: left;
   padding: 0.5rem;
   border-bottom: 1px solid #e5e7eb;
+}
+.actions {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
 }
 th {
   background: #f9fafb;

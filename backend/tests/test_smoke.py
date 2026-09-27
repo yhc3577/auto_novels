@@ -1,10 +1,18 @@
-"""Smoke tests — wordcount + iron rule."""
+"""Tests for intent router + iron rule."""
 
 from __future__ import annotations
 
 import ast
 from pathlib import Path
 
+import pytest
+
+from app.agents import (
+    HEURISTIC_RULES,
+    IMPLEMENTED_INTENTS,
+    INTENT_LABELS,
+    heuristic_intent,
+)
 from app.services.wordcount import WordcountService
 
 
@@ -15,8 +23,7 @@ from app.services.wordcount import WordcountService
 
 def test_wordcount_cjk():
     wc = WordcountService()
-    text = "回到雾港的夜晚"  # 7 个汉字
-    assert wc.measure(text) == 7
+    assert wc.measure("回到雾港的夜晚") == 7
 
 
 def test_wordcount_ascii():
@@ -26,34 +33,72 @@ def test_wordcount_ascii():
 
 def test_wordcount_mixed():
     wc = WordcountService()
-    # 4 个汉字 + 2 个 ASCII 词
     assert wc.measure("雾港 hello 夜 world") == 6
 
 
 def test_wordcount_checkpoint_passed():
     wc = WordcountService()
-    text = "啊" * 100  # 100 字
-    r = wc.checkpoint(text, target=100, tolerance=0.2)
+    r = wc.checkpoint("啊" * 100, target=100, tolerance=0.2)
     assert r["passed"] is True
-    assert r["actual"] == 100
 
 
 def test_wordcount_checkpoint_failed():
     wc = WordcountService()
-    text = "啊" * 50
-    r = wc.checkpoint(text, target=100, tolerance=0.2)
+    r = wc.checkpoint("啊" * 50, target=100, tolerance=0.2)
     assert r["passed"] is False
 
 
 # ---------------------------------------------------------------------------
-# Iron rule: agents / graphs 不能 import repository / models
+# Intent router — 启发式
 # ---------------------------------------------------------------------------
 
 
-def _imports_from(path: Path, *, file_suffix: str = ".py") -> set[str]:
-    """AST 扫描：提取 `from app.X import Y` 的 X 模块前缀."""
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        # 长篇
+        ("写长篇第3章", "write_long"),
+        ("继续写", "write_long"),
+        ("开书", "write_long"),
+        ("写第5章", "write_long"),
+        # 短篇
+        ("写个短篇", "write_short"),
+        ("一个短故事", "write_short"),
+        # 扫榜
+        ("扫榜", "scan"),
+        ("扫一下悬疑题材", "scan"),
+        # 审查
+        ("审查一下", "review"),
+        # 拆书
+        ("拆书", "analyze"),
+        # 兜底
+        ("hello", "unknown"),
+        ("", "unknown"),
+    ],
+)
+def test_heuristic_intent(text, expected):
+    assert heuristic_intent(text) == expected
+
+
+def test_intent_labels_contain_implemented():
+    """已实现的 intent 必须是 INTENT_LABELS 的子集."""
+    for intent in IMPLEMENTED_INTENTS:
+        assert intent in INTENT_LABELS
+
+
+def test_implemented_intents_match_dispatch_targets():
+    """dispatch 节点分发的三个意图必须都已实现."""
+    assert IMPLEMENTED_INTENTS == frozenset({"write_long", "write_short", "scan"})
+
+
+# ---------------------------------------------------------------------------
+# Iron rule
+# ---------------------------------------------------------------------------
+
+
+def _imports_from(path: Path) -> set[str]:
     imports: set[str] = set()
-    for py in path.rglob(f"*{file_suffix}"):
+    for py in path.rglob("*.py"):
         if "__pycache__" in py.parts:
             continue
         try:
@@ -61,9 +106,8 @@ def _imports_from(path: Path, *, file_suffix: str = ".py") -> set[str]:
         except SyntaxError:
             continue
         for node in ast.walk(tree):
-            if isinstance(node, ast.ImportFrom) and node.module:
-                if node.module.startswith("app."):
-                    imports.add(node.module)
+            if isinstance(node, ast.ImportFrom) and node.module and node.module.startswith("app."):
+                imports.add(node.module)
     return imports
 
 

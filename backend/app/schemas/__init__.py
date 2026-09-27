@@ -2,6 +2,7 @@
 
 from app.schemas.chapter import ChapterOut
 from app.schemas.project import ProjectCreate, ProjectOut
+from app.schemas.routing import RouterRequest, RouterResponse, Scenario
 from app.schemas.writing import (
     StageStatus,
     WriteRequest,
@@ -15,4 +16,7 @@ __all__ = [
     "WriteRequest",
     "WriteResponse",
     "StageStatus",
+    "RouterRequest",
+    "RouterResponse",
+    "Scenario",
 ]

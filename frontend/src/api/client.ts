@@ -49,6 +49,26 @@ export interface WriteResponse {
   errors: string[]
 }
 
+export type Scenario = 'auto' | 'write_long' | 'write_short' | 'scan'
+
+export interface RouterRequest {
+  project_id: number
+  user_input: string
+  explicit_scenario?: Scenario
+}
+
+export interface RouterResponse {
+  intent: string
+  graph_invoked: string
+  supported: boolean
+  state_revision: number | null
+  final_wordcount: number | null
+  stages: StageStatus[]
+  payload: Record<string, unknown>
+  errors: string[]
+  notice: string | null
+}
+
 // ---- Endpoints ----
 
 export const api = {

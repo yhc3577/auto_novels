@@ -1,15 +1,12 @@
-"""WriteGraph — 最薄实现（4 节点）:
+"""WriteGraphShort — 短篇写作图（§3.4 短篇路径）.
 
   route_scenario
-    └─► write_prose      (agent: narrative_writer)
-    └─► wordcount_checkpoint (service: WordcountService)
-    └─► tracking_commit   (service: TrackingService — 单事务多表写入)
+    └─► write_prose      (agent: narrative_writer, compact prompt)
+    └─► wordcount_checkpoint
+    └─► tracking_commit
     └─► END
 
-铁律：
-- graph 节点不直接 import repository / models
-- 只通过 service 操作 DB
-- agent 只能被 graph 节点调用，agent 本身不感知 session
+vs 长篇：跳过 write_prep / quality_scan；prompt 紧凑（一气呵成）；字数较短。
 """
 
 from __future__ import annotations
@@ -27,18 +24,16 @@ from app.services.tracking import ChapterTransaction, TrackingService
 from app.services.wordcount import WordcountService
 
 
-# ---------------------------------------------------------------------------
-# Stage helpers
-# ---------------------------------------------------------------------------
-
-
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _push_stage(state: StoryState, name: str) -> list:
+def _push_stage(state: StoryState, name: str, *, notes: str | None = None) -> list:
     stages = list(state.get("stages") or [])
-    stages.append({"name": name, "status": "running", "started_at": _now()})
+    entry: dict = {"name": name, "status": "running", "started_at": _now()}
+    if notes:
+        entry["notes"] = notes
+    stages.append(entry)
     return stages
 
 
@@ -52,72 +47,54 @@ def _complete_stage(state: StoryState, name: str, status: str = "done") -> list:
     return stages
 
 
-# ---------------------------------------------------------------------------
-# Nodes
-# ---------------------------------------------------------------------------
-
-
 async def route_scenario_node(state: StoryState, **deps: Any) -> dict:
-    """默认 chapter_no = last_committed + 1。"""
+    """短篇：chapter_no=1（demo 简化，每次新建短篇 chapter_no 递进）."""
     session: AsyncSession = deps["session"]
-    factory: LLMFactory = deps["llm_factory"]
     project_id = state["project_id"]
-    user_input = state.get("user_input") or ""
-
-    # 推算 chapter_no（若用户未传）
     if not state.get("chapter_no"):
-        tracking = TrackingService(session)
-        last = await tracking.init(project_id)
+        last = await TrackingService(session).init(project_id)
         chapter_no = last + 1
     else:
         chapter_no = int(state["chapter_no"])
-
-    target = int(state.get("target_wordcount") or 1500)
-
+    # 短篇默认字数 800
+    target = int(state.get("target_wordcount") or 800)
     return {
         "chapter_no": chapter_no,
         "target_wordcount": target,
-        "stages": _push_stage(state, "route_scenario"),
-        "extra": {"factory_provider": factory.provider},
+        "length": "short",
+        "stages": _push_stage(state, "route_scenario", notes=f"length=short target={target}"),
     }
 
 
 async def write_prose_node(state: StoryState, **deps: Any) -> dict:
-    """调 narrative_writer 生成正文。"""
+    """短篇：紧凑 prompt，要求一气呵成、不超过 1500 字."""
     factory: LLMFactory = deps["llm_factory"]
     agent = build_narrative_writer(factory)
     chapter_no = int(state["chapter_no"])
-    target = int(state.get("target_wordcount") or 1500)
+    target = int(state.get("target_wordcount") or 800)
 
     prompt = (
-        f"项目 {state['project_id']} 第 {chapter_no} 章。\n"
-        f"用户输入: {state.get('user_input', '')}\n"
-        f"目标字数: {target} (±20%)\n"
-        "请直接输出 markdown 正文。"
+        f"【短篇】项目 {state['project_id']} · chapter_no={chapter_no}。\n"
+        f"主题: {state.get('user_input', '')}\n"
+        f"字数: {target} (±25%)\n"
+        "要求：开篇即冲突、单一情绪线、首尾呼应、不留悬念句。\n"
+        "直接输出 markdown 正文。"
     )
     msg = await agent.run(prompt)
     body = (msg.content or "").strip()
-    if not body:
-        body = f"# 第{chapter_no}章\n\n（写作失败，请检查 LLM provider。）"
-    elif not body.lstrip().startswith("#"):
-        body = f"# 第{chapter_no}章\n\n" + body
+    if not body.lstrip().startswith("#"):
+        body = f"# 短篇 · {state.get('user_input', '')[:20]}\n\n" + body
 
     stages = _complete_stage(state, "route_scenario")
     stages = stages + [{"name": "write_prose", "status": "running", "started_at": _now()}]
-
-    return {
-        "prose_draft": body,
-        "stages": stages,
-    }
+    return {"prose_draft": body, "stages": stages}
 
 
 async def wordcount_checkpoint_node(state: StoryState, **deps: Any) -> dict:
-    """字数校验（CJK + 英文）。"""
     wc = WordcountService()
     body = state.get("prose_draft") or ""
-    target = int(state.get("target_wordcount") or 1500)
-    report = wc.checkpoint(body, target)
-
+    target = int(state.get("target_wordcount") or 800)
+    report = wc.checkpoint(body, target, tolerance=0.25)
     stages = _complete_stage(state, "write_prose")
     stages = stages + [
         {
@@ -127,42 +104,25 @@ async def wordcount_checkpoint_node(state: StoryState, **deps: Any) -> dict:
             "notes": f"actual={report['actual']} target={report['target']} passed={report['passed']}",
         }
     ]
-
-    return {
-        "wordcount_report": report,
-        "stages": stages,
-    }
+    return {"wordcount_report": report, "stages": stages}
 
 
 async def tracking_commit_node(state: StoryState, **deps: Any) -> dict:
-    """原子化写入 chapters + chapter_records（铁律：唯一 commit 入口）。"""
     session: AsyncSession = deps["session"]
     project_id = state["project_id"]
     chapter_no = int(state["chapter_no"])
     body = state.get("prose_draft") or ""
-
-    wc_report = state.get("wordcount_report") or {}
-    summary = (body[:140] + "…") if len(body) > 140 else body
-    hook_match = body.split("\n\n")[-1][:200] if "\n\n" in body else body[:200]
+    summary = body if len(body) <= 140 else body[:140] + "…"
 
     tx = ChapterTransaction(
         chapter_no=chapter_no,
         chapter_content=body,
-        chapter_title=f"第{chapter_no}章",
+        chapter_title=f"短篇 · {chapter_no}",
         summary_text=summary,
-        chapter_hook=hook_match,
-        continuity_to_next=None,
-        open_conflicts=None,
-        location=None,
-        pov=None,
-        emotion_arc={"start": "neutral", "end": "tense", "intensity": "medium"},
-        characters_in_scene=None,
-        foreshadowing_changes=None,
+        chapter_hook=None,
+        emotion_arc={"start": "tense", "end": "resolved", "intensity": "high"},
     )
-    tracking = TrackingService(session)
-    snap = await tracking.commit(project_id, tx)
-    # 由调用方统一 await session.commit() —— 这里仅 flush
-
+    snap = await TrackingService(session).commit(project_id, tx)
     stages = _complete_stage(state, "wordcount_checkpoint")
     stages = stages + [
         {
@@ -172,34 +132,24 @@ async def tracking_commit_node(state: StoryState, **deps: Any) -> dict:
             "notes": f"chapter_id={snap.chapter_id} wordcount={snap.final_wordcount}",
         }
     ]
-
     return {
         "chapter_id": snap.chapter_id,
         "state_revision": snap.state_revision,
         "final_wordcount": snap.final_wordcount,
         "summary_text": summary,
-        "chapter_hook": hook_match,
         "stages": stages,
     }
 
 
-# ---------------------------------------------------------------------------
-# Build graph
-# ---------------------------------------------------------------------------
-
-
-def build_write_graph():
+def build_write_short_graph():
     g = StateGraph(StoryState)
-
     g.add_node("route_scenario", route_scenario_node)
     g.add_node("write_prose", write_prose_node)
     g.add_node("wordcount_checkpoint", wordcount_checkpoint_node)
     g.add_node("tracking_commit", tracking_commit_node)
-
     g.set_entry_point("route_scenario")
     g.add_edge("route_scenario", "write_prose")
     g.add_edge("write_prose", "wordcount_checkpoint")
     g.add_edge("wordcount_checkpoint", "tracking_commit")
     g.add_edge("tracking_commit", END)
-
-    return g.compile(name="write_demo")
+    return g.compile(name="write_short")

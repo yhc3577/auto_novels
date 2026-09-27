@@ -1,4 +1,8 @@
-"""Write endpoint — 触发 WriteGraph 跑一次写章节流."""
+"""Write endpoint — 显式调 write_long 图（保留 /api/write 作为长篇直入口）.
+
+新代码推荐用 /api/router（自动识别 + 分发）。
+/api/write 保留以便客户端显式调长篇，语义不变。
+"""
 
 from __future__ import annotations
 
@@ -6,7 +10,7 @@ from fastapi import APIRouter
 
 from app.agents import get_llm_factory
 from app.deps import SessionDep
-from app.graphs import build_write_graph
+from app.graphs import get_registry
 from app.repositories.project import ProjectRepository
 from app.schemas.writing import StageStatus, WriteRequest, WriteResponse
 
@@ -15,13 +19,12 @@ router = APIRouter(prefix="/api/write", tags=["write"])
 
 @router.post("", response_model=WriteResponse)
 async def write_chapter(payload: WriteRequest, session: SessionDep) -> WriteResponse:
-    # 校验项目存在
     project = await ProjectRepository(session).get(payload.project_id)
 
-    # 准备 deps（铁律：graph 不直接 import repository / models）
     deps = {
         "session": session,
         "llm_factory": get_llm_factory(),
+        "registry": get_registry(),
     }
 
     initial_state = {
@@ -29,14 +32,13 @@ async def write_chapter(payload: WriteRequest, session: SessionDep) -> WriteResp
         "chapter_no": payload.chapter_no,
         "user_input": payload.user_input,
         "target_wordcount": payload.target_wordcount,
+        "explicit_scenario": "write_long",
         "stages": [],
         "errors": [],
     }
 
-    graph = build_write_graph()
+    graph = get_registry().write_long
     result = await graph.ainvoke(initial_state, config={"deps": deps})
-
-    # 路由层统一 commit
     await session.commit()
 
     stages_raw = result.get("stages") or []
