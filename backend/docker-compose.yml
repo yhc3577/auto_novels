@@ -1,0 +1,24 @@
+# dev: 只起 PG（端口暴露给宿主机）
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: auto-novels-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: auto_novels
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # 首次启动自动应用 schema（容器空 volume 时）
+      - ../docs/schema-pg-v0.1.sql:/docker-entrypoint-initdb.d/01-schema-v0.1.sql:ro
+      - ../docs/schema-pg-v0.2.sql:/docker-entrypoint-initdb.d/02-schema-v0.2.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d auto_novels"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  pgdata:

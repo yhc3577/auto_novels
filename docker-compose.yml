@@ -1,0 +1,73 @@
+# 根 docker-compose — 一键起完整 nginx + 前端 + 后端 + PG
+#
+# 用法：
+#   docker compose up -d --build
+#   浏览器打开 http://localhost
+#
+# 端口：
+#   80       → nginx（唯一对外入口）
+#   8082     → backend（容器内，不对外）
+#   5173     → frontend dev（开发模式独立 vite，不在本 compose 内）
+#   5432     → postgres（容器内，不对外）
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: auto-novels-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: auto_novels
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./docs/schema-pg-v0.1.sql:/docker-entrypoint-initdb.d/01-schema-v0.1.sql:ro
+      - ./docs/schema-pg-v0.2.sql:/docker-entrypoint-initdb.d/02-schema-v0.2.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d auto_novels"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    networks: [internal]
+
+  backend:
+    build:
+      context: ./backend
+    container_name: auto-novels-backend
+    environment:
+      LLM_PROVIDER: mock
+      PG_DSN: postgresql+asyncpg://postgres:postgres@postgres:5432/auto_novels
+      PG_SYNC_DSN: postgresql+psycopg2://postgres:postgres@postgres:5432/auto_novels
+      CORS_ORIGINS: http://localhost
+    depends_on:
+      postgres:
+        condition: service_healthy
+    expose:
+      - "8082"
+    networks: [internal]
+
+  frontend:
+    build:
+      context: ./frontend
+    container_name: auto-novels-frontend
+    expose:
+      - "80"
+    networks: [internal]
+
+  nginx:
+    image: nginx:alpine
+    container_name: auto-novels-nginx
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+    depends_on:
+      - backend
+      - frontend
+    networks: [internal]
+
+networks:
+  internal:
+
+volumes:
+  pgdata:

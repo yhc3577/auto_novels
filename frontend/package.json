@@ -1,0 +1,22 @@
+{
+  "name": "auto-novels-frontend",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc --noEmit && vite build",
+    "preview": "vite preview --host 0.0.0.0 --port 8080"
+  },
+  "dependencies": {
+    "vue": "^3.4",
+    "vue-router": "^4.3",
+    "pinia": "^2.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^5.0",
+    "typescript": "^5.4",
+    "vite": "^5.2",
+    "vue-tsc": "^2.0"
+  }
+}
