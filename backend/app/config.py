@@ -35,6 +35,10 @@ class Settings(BaseSettings):
     llm_writer_model: str = Field(default="claude-sonnet-4-5")
     llm_temperature: float = Field(default=0.8, ge=0.0, le=2.0)
 
+    # reasoning 模型（如 MiniMax-M3、DeepSeek-R1）需要更大预算，否则正文被 token budget 截断
+    # 4000 是经验值：reasoning + 正文 1500 中文字 刚刚好
+    llm_max_tokens: int = Field(default=4000, ge=256)
+
     # ----- PG -----
     pg_dsn: str = (
         "postgresql+asyncpg://postgres:postgres@localhost:5432/auto_novels"

@@ -119,6 +119,7 @@ class LLMFactory:
             self._real = ChatAnthropic(
                 model=settings.llm_writer_model,
                 temperature=settings.llm_temperature,
+                max_tokens=settings.llm_max_tokens,
                 anthropic_api_key=settings.anthropic_api_key,
             )
 
@@ -127,6 +128,7 @@ class LLMFactory:
             self._real = ChatOpenAI(
                 model=settings.llm_writer_model,
                 temperature=settings.llm_temperature,
+                max_tokens=settings.llm_max_tokens,
                 api_key=settings.openai_api_key,
             )
 
@@ -142,8 +144,9 @@ class LLMFactory:
                     "LLM_PROVIDER=newapi 时必须设置 NEWAPI_API_KEY"
                 )
             self._real = ChatOpenAI(
-                model=settings.llm_writer_model,         # 如 "anthropic/claude-sonnet-4-5"
+                model=settings.llm_writer_model,         # 如 "anthropic/claude-sonnet-4-5" 或 "MiniMax-M3"
                 temperature=settings.llm_temperature,
+                max_tokens=settings.llm_max_tokens,       # reasoning 模型需要 ≥ 4000
                 base_url=settings.newapi_base_url,        # 如 "https://your-newapi-domain/v1"
                 api_key=settings.newapi_api_key,         # NewAPI 网关签发的 key
                 # 透传 default_headers 给某些 NewAPI 部署需要带额外 header 的场景
