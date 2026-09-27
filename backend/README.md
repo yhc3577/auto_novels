@@ -66,12 +66,33 @@ pytest -q
 
 ## 5. 切换真实 LLM
 
+三选一，改 `.env` 即可（代码路径完全写好）：
+
 ```bash
-# .env
+# ── A. 直连 Anthropic ─────────────────────────────
 LLM_PROVIDER=anthropic
 ANTHROPIC_API_KEY=sk-ant-...
 LLM_WRITER_MODEL=claude-sonnet-4-5
+
+# ── B. 直连 OpenAI ────────────────────────────────
+LLM_PROVIDER=openai
+OPENAI_API_KEY=sk-...
+LLM_WRITER_MODEL=gpt-4o-mini
+
+# ── C. NewAPI 网关（OpenAI 兼容协议，推荐）─────────
+LLM_PROVIDER=newapi
+NEWAPI_BASE_URL=https://your-newapi-domain/v1
+NEWAPI_API_KEY=sk-xxxxxxxxxxxxxx          # NewAPI 网关签发的 key，不是上游 provider 的
+LLM_WRITER_MODEL=anthropic/claude-sonnet-4-5   # NewAPI 下模型名格式：<provider>/<model>
 ```
+
+### NewAPI 部署说明
+
+- NewAPI 是 OpenAI Chat Completions 兼容网关，后端可用任何 provider（Claude / GPT / Gemini / 国产）
+- 本项目通过 `langchain-openai.ChatOpenAI(base_url=…, api_key=…)` 接入，与 NewAPI 走同一协议
+- 鉴权使用 NewAPI 网关发的 `sk-…` key，**不是**上游 provider 的 key
+- 模型名按 NewAPI 约定：`<provider>/<model>`（例如 `anthropic/claude-sonnet-4-5`、`openai/gpt-4o`）
+- 切换失败时会报 `ValueError("LLM_PROVIDER=newapi 时必须设置 NEWAPI_BASE_URL")`
 
 ## 6. 已知 demo 限制
 

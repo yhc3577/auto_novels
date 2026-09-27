@@ -1,7 +1,16 @@
 """LLM factory + MockChatModel.
 
 demo 默认走 mock：返回根据 [role:xxx] 标签选择的预置 payload。
-生产只需改 LLM_PROVIDER=anthropic/openai + API key。
+
+切真 LLM 一行 env：
+- LLM_PROVIDER=anthropic  →  ChatAnthropic（直连 Anthropic）
+- LLM_PROVIDER=openai     →  ChatOpenAI（直连 OpenAI）
+- LLM_PROVIDER=newapi     →  ChatOpenAI 通过 NewAPI 网关（OpenAI 兼容协议）
+
+NewAPI 网关说明：
+- 兼容 OpenAI Chat Completions 协议
+- 配置 NEWAPI_BASE_URL（如 https://your-newapi-domain/v1）+ NEWAPI_API_KEY（网关发的 key）
+- 模型名按 NewAPI 约定，通常是 "<provider>/<model>" 格式
 """
 
 from __future__ import annotations
@@ -21,7 +30,7 @@ from app.config import settings
 
 
 class MockChatModel(BaseChatModel):
-    """根据 system prompt 里的 [role:xxx] 标签返回预置正文。
+    """根据 system prompt 里的 [role:xxx] 标签返回预置正文.
 
     不调任何外部 API，方便 demo 零依赖跑通。
     """
@@ -46,7 +55,7 @@ class MockChatModel(BaseChatModel):
 
 
 def _default_payloads() -> dict[str, str]:
-    """Mock 模式下每个 agent 的预置正文。"""
+    """Mock 模式下每个 agent 的预置正文."""
     return {
         "narrative_writer": (
             "# 第一章 · 回到雾港的夜晚\n\n"
@@ -86,11 +95,11 @@ def _default_payloads() -> dict[str, str]:
 # ---------------------------------------------------------------------------
 
 
-ProviderName = Literal["mock", "anthropic", "openai"]
+ProviderName = Literal["mock", "anthropic", "openai", "newapi"]
 
 
 class LLMFactory:
-    """按 role 名分配 ChatModel。
+    """按 role 名分配 ChatModel.
 
     demo 阶段所有 role 都返回同一个 mock 实例；
     真实 LLM 切换由 `provider` 决定具体后端。
@@ -104,23 +113,58 @@ class LLMFactory:
     def _real_model(self) -> BaseChatModel:
         if self._real is not None:
             return self._real
+
         if self.provider == "anthropic":
             from langchain_anthropic import ChatAnthropic
+            self._real = ChatAnthropic(
+                model=settings.llm_writer_model,
+                temperature=settings.llm_temperature,
+                anthropic_api_key=settings.anthropic_api_key,
+            )
 
-            self._real = ChatAnthropic(model=settings.llm_writer_model, temperature=0.8)
         elif self.provider == "openai":
             from langchain_openai import ChatOpenAI
+            self._real = ChatOpenAI(
+                model=settings.llm_writer_model,
+                temperature=settings.llm_temperature,
+                api_key=settings.openai_api_key,
+            )
 
-            self._real = ChatOpenAI(model="gpt-4o-mini", temperature=0.8)
+        elif self.provider == "newapi":
+            # NewAPI 网关：OpenAI 兼容协议 → 用 ChatOpenAI + 自定义 base_url
+            from langchain_openai import ChatOpenAI
+            if not settings.newapi_base_url:
+                raise ValueError(
+                    "LLM_PROVIDER=newapi 时必须设置 NEWAPI_BASE_URL"
+                )
+            if not settings.newapi_api_key:
+                raise ValueError(
+                    "LLM_PROVIDER=newapi 时必须设置 NEWAPI_API_KEY"
+                )
+            self._real = ChatOpenAI(
+                model=settings.llm_writer_model,         # 如 "anthropic/claude-sonnet-4-5"
+                temperature=settings.llm_temperature,
+                base_url=settings.newapi_base_url,        # 如 "https://your-newapi-domain/v1"
+                api_key=settings.newapi_api_key,         # NewAPI 网关签发的 key
+                # 透传 default_headers 给某些 NewAPI 部署需要带额外 header 的场景
+                default_headers={"X-Source": "auto_novels"},
+            )
+
         else:
-            self._real = self._mock  # mock 走 fallback
+            # mock / 未知 provider → 走 mock
+            self._real = self._mock
+
         return self._real
 
     def get(self, role: str = "default", *, temperature: float | None = None) -> BaseChatModel:
-        """按 role 取一个 ChatModel。demo 阶段都是 mock。"""
+        """按 role 取一个 ChatModel.
+
+        - mock：返回 MockChatModel（内部按 [role:xxx] tag 分流）
+        - 真 provider：返回对应后端（demo 阶段所有 role 共用同一实例）
+        """
         if self.provider == "mock":
             return self._mock
-        # 真实 provider 不区分 role（demo 简化）
+        # 真实 provider：不区分 role（demo 简化），未来可按 role 拆不同模型
         return self._real_model()
 
 

@@ -16,13 +16,26 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    # LLM
-    llm_provider: Literal["mock", "anthropic", "openai"] = "mock"
+    # ----- LLM -----
+    # provider 取值：mock | anthropic | openai | newapi
+    llm_provider: Literal["mock", "anthropic", "openai", "newapi"] = "mock"
+
+    # 直连 Anthropic / OpenAI
     anthropic_api_key: str | None = None
     openai_api_key: str | None = None
-    llm_writer_model: str = Field(default="claude-sonnet-4-5")
 
-    # PG — async DSN used at runtime; sync DSN used by Alembic / init script
+    # NewAPI 网关（OpenAI 兼容协议）
+    # 典型 base_url 形如：https://your-newapi-domain/v1
+    # key 是 NewAPI 网关自己签发的，不是上游 provider 的 key
+    newapi_base_url: str | None = None
+    newapi_api_key: str | None = None
+
+    # 模型名（demo 阶段所有 role 共用一个，production 可按 role 拆分）
+    # NewAPI 下模型名通常是 "<provider>/<model>"，如 "anthropic/claude-sonnet-4-5"
+    llm_writer_model: str = Field(default="claude-sonnet-4-5")
+    llm_temperature: float = Field(default=0.8, ge=0.0, le=2.0)
+
+    # ----- PG -----
     pg_dsn: str = (
         "postgresql+asyncpg://postgres:postgres@localhost:5432/auto_novels"
     )
@@ -30,12 +43,12 @@ class Settings(BaseSettings):
         "postgresql+psycopg2://postgres:postgres@localhost:5432/auto_novels"
     )
 
-    # API
+    # ----- API -----
     app_host: str = "0.0.0.0"
     app_port: int = 8082
     cors_origins: str = "http://localhost:5173,http://localhost:8080"
 
-    # Logging
+    # ----- Logging -----
     log_level: str = "INFO"
 
     @property
