@@ -99,7 +99,46 @@ curl -s -X POST http://localhost/api/write \
 
 返回包含 `stages[]`（节点进度）/ `final_wordcount` / `chapter_hook` / `summary_text`。
 
-## 5. 切换到真实 LLM
+## 5. 开发工作流（分支约定）
+
+| 分支 | 角色 | 推送方式 |
+|---|---|---|
+| **`dev`** | **日常开发分支** | `git push` 默认到这里 |
+| `main` | 稳定分支（GitHub 默认显示） | **不在本地直接 push** — 由 dev 经 PR/merge 更新 |
+
+**约定**：
+
+1. **所有代码改动都在 `dev` 分支完成并推送**（`git push`）
+2. **`main` 分支由显式操作更新**：
+   - 推荐：开 PR 让 `dev → main`
+   - 或：`git push origin dev:main`（快速合并）
+3. 本仓库附带 **pre-push hook** 自动阻止从本地 `main` 直接 `git push origin main`
+
+**激活 hooks**（clone 后只需一次）：
+
+```bash
+bash scripts/install-hooks.sh
+# 或：git config core.hooksPath .githooks
+```
+
+**典型日常**：
+
+```bash
+git checkout dev
+git pull
+# ... 改代码 ...
+git add . && git commit -m "feat: ..."
+git push            # → origin/dev
+```
+
+**违反约定时**：
+
+```bash
+$ git push origin main
+❌ 禁止从本地 main 直接 push 到 origin/main
+```
+
+## 6. 切换到真实 LLM
 
 `backend/.env`（方式 B）或根 `docker-compose.yml` `backend.environment`：
 
@@ -109,7 +148,7 @@ ANTHROPIC_API_KEY=sk-ant-...
 LLM_WRITER_MODEL=claude-sonnet-4-5
 ```
 
-## 6. 目录结构
+## 7. 目录结构
 
 ```
 auto_novels/
@@ -120,7 +159,7 @@ auto_novels/
 └── docker-compose.yml   # 4 服务一键起
 ```
 
-## 7. 已实现 vs 设计差距
+## 8. 已实现 vs 设计差距
 
 | 项 | 状态 |
 |---|---|

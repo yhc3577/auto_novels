@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# pre-push hook — 阻止从本地 main 直接 push 到 origin/main
+#
+# 工作流约定：
+#   - 默认开发分支：dev
+#   - 日常 push：git push       (origin/dev)
+#   - main 分支：仅在显式 PR / merge 时更新
+#     例外：本地 main 与 origin/main SHA 相同（fast-forward noop）
+#     例外：显式 `git push origin dev:main`（在任意分支运行）允许通过
+#
+# 激活：git config core.hooksPath .githooks
+
+set -e
+
+protected_branch='main'
+current_branch=$(git symbolic-ref HEAD 2>/dev/null | sed 's|^refs/heads/||' || echo "")
+
+while read -r local_ref local_sha remote_ref remote_sha; do
+    # 只关心 main 分支
+    if [ "$remote_ref" != "refs/heads/$protected_branch" ]; then
+        continue
+    fi
+
+    # 同 SHA fast-forward：noop，允许
+    if [ "$local_sha" = "$remote_sha" ]; then
+        continue
+    fi
+
+    # 当前在 main 分支 → 阻止
+    if [ "$current_branch" = "$protected_branch" ]; then
+        echo "❌ 禁止从本地 main 直接 push 到 origin/main"
+        echo ""
+        echo "约定：代码改动只推 origin/dev，main 由显式 PR/merge 更新。"
+        echo ""
+        echo "正确做法："
+        echo "  git checkout dev"
+        echo "  git push              # 推到 origin/dev"
+        echo ""
+        echo "如确需把 dev 合并到 main（绕过 PR）："
+        echo "  git push origin dev:main"
+        exit 1
+    fi
+
+    # 显式 refspec push（如 dev:main） → 允许
+done
+
+exit 0
