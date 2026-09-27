@@ -1,20 +1,16 @@
-"""WriteGraphLong — 长篇章节写作图（§3.4 长篇路径）.
+"""WriteGraphLong — 长篇章节写作图.
 
-  route_scenario
-    └─► write_prep      (service: ContextService.assemble_recall)
-    └─► write_prose      (agent: narrative_writer)
-    └─► wordcount_checkpoint (service: WordcountService)
-    └─► quality_scan     (service: QualityService 4 项)
-    └─► tracking_commit  (service: TrackingService — 单事务多表写入)
-    └─► END
+  route_scenario → write_prep → write_prose → wordcount_checkpoint → quality_scan → tracking_commit → END
 
-vs 短篇：含 write_prep / quality_scan；prompt 更详细（要求结构、节奏、钩子）。
+设计：
+- 每个节点返回 {"stages": [done event]} —— reducer 自动累加
+- 不再手工 list concat / _push_stage / _complete_stage helper
+- 当作为 RouterGraph 的 subgraph-as-node 节点时，LangGraph 自动处理 state 合并
 """
 
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any
 
 from langgraph.graph import END, StateGraph
 
@@ -31,32 +27,20 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _push_stage(state: StoryState, name: str, *, notes: str | None = None) -> list:
-    stages = list(state.get("stages") or [])
-    entry: dict = {"name": name, "status": "running", "started_at": _now()}
+def _stage(name: str, status: str = "done", notes: str | None = None) -> dict:
+    s: dict = {
+        "name": name,
+        "status": status,
+        "started_at": _now(),
+        "finished_at": _now(),
+    }
     if notes:
-        entry["notes"] = notes
-    stages.append(entry)
-    return stages
+        s["notes"] = notes
+    return s
 
 
-def _complete_stage(state: StoryState, name: str, status: str = "done") -> list:
-    stages = list(state.get("stages") or [])
-    for s in reversed(stages):
-        if s["name"] == name and s["status"] == "running":
-            s["status"] = status
-            s["finished_at"] = _now()
-            break
-    return stages
-
-
-# ---------------------------------------------------------------------------
-# Nodes
-# ---------------------------------------------------------------------------
-
-
-async def route_scenario_node(state: StoryState, **deps: Any) -> dict:
-    """长篇：推算 chapter_no + 锁定 length=long."""
+async def route_scenario_node(state: StoryState, **deps) -> dict:
+    """推算 chapter_no + 锁定 length=long."""
     session: AsyncSession = deps["session"]
     project_id = state["project_id"]
     if not state.get("chapter_no"):
@@ -69,24 +53,20 @@ async def route_scenario_node(state: StoryState, **deps: Any) -> dict:
         "chapter_no": chapter_no,
         "target_wordcount": target,
         "length": "long",
-        "stages": _push_stage(state, "route_scenario", notes=f"length=long target={target}"),
+        "stages": [_stage("route_scenario", notes=f"length=long target={target}")],
     }
 
 
-async def write_prep_node(state: StoryState, **deps: Any) -> dict:
+async def write_prep_node(state: StoryState, **deps) -> dict:
     """召回 last_n 章 + 参考材料 + 作者记忆."""
     session: AsyncSession = deps["session"]
     ctx = ContextService(session)
-    recall = await ctx.assemble_recall(
-        state["project_id"], last_n=3, include_refs=True
-    )
-    stages = _complete_stage(state, "route_scenario")
-    stages = stages + [{"name": "write_prep", "status": "running", "started_at": _now()}]
-    return {"recall": recall, "stages": stages}
+    recall = await ctx.assemble_recall(state["project_id"], last_n=3, include_refs=True)
+    return {"recall": recall, "stages": [_stage("write_prep")]}
 
 
-async def write_prose_node(state: StoryState, **deps: Any) -> dict:
-    """调 narrative_writer 生成正文。prompt 比短篇详细（含召回 + 钩子要求）."""
+async def write_prose_node(state: StoryState, **deps) -> dict:
+    """调 narrative_writer 生成正文."""
     factory: LLMFactory = deps["llm_factory"]
     agent = build_narrative_writer(factory)
     chapter_no = int(state["chapter_no"])
@@ -108,54 +88,35 @@ async def write_prose_node(state: StoryState, **deps: Any) -> dict:
     body = (msg.content or "").strip()
     if not body.lstrip().startswith("#"):
         body = f"# 第{chapter_no}章\n\n" + body
-
-    stages = _complete_stage(state, "write_prep")
-    stages = stages + [{"name": "write_prose", "status": "running", "started_at": _now()}]
-    return {"prose_draft": body, "stages": stages}
+    return {"prose_draft": body, "stages": [_stage("write_prose", notes=f"len={len(body)}")]}
 
 
-async def wordcount_checkpoint_node(state: StoryState, **deps: Any) -> dict:
+async def wordcount_checkpoint_node(state: StoryState, **deps) -> dict:
     wc = WordcountService()
     body = state.get("prose_draft") or ""
     target = int(state.get("target_wordcount") or 3000)
     report = wc.checkpoint(body, target)
-    stages = _complete_stage(state, "write_prose")
-    stages = stages + [
-        {
-            "name": "wordcount_checkpoint",
-            "status": "running",
-            "started_at": _now(),
-            "notes": f"actual={report['actual']} target={report['target']} passed={report['passed']}",
-        }
-    ]
-    return {"wordcount_report": report, "stages": stages}
+    return {
+        "wordcount_report": report,
+        "stages": [_stage("wordcount_checkpoint", notes=f"actual={report['actual']} passed={report['passed']}")],
+    }
 
 
-async def quality_scan_node(state: StoryState, **deps: Any) -> dict:
-    """4 项基础质量扫描（ai_patterns / degeneration / punctuation / banned_words）。
-
-    demo 简化：不抛错，只标注。
-    """
+async def quality_scan_node(state: StoryState, **deps) -> dict:
+    """4 项基础质量扫描（demo 简化版）."""
     body = state.get("prose_draft") or ""
-    # 占位：用长度 + 关键词个数做最简 sanity check
     ai_marker_hits = sum(1 for kw in ["综上所述", "值得注意的是"] if kw in body)
     quality_report = {
         "ai_patterns": {"hits": ai_marker_hits, "passed": ai_marker_hits == 0},
         "wordcount": state.get("wordcount_report", {}),
     }
-    stages = _complete_stage(state, "wordcount_checkpoint")
-    stages = stages + [
-        {
-            "name": "quality_scan",
-            "status": "running",
-            "started_at": _now(),
-            "notes": f"ai_patterns_hits={ai_marker_hits}",
-        }
-    ]
-    return {"quality_report": quality_report, "stages": stages}
+    return {
+        "quality_report": quality_report,
+        "stages": [_stage("quality_scan", notes=f"ai_hits={ai_marker_hits}")],
+    }
 
 
-async def tracking_commit_node(state: StoryState, **deps: Any) -> dict:
+async def tracking_commit_node(state: StoryState, **deps) -> dict:
     session: AsyncSession = deps["session"]
     project_id = state["project_id"]
     chapter_no = int(state["chapter_no"])
@@ -172,22 +133,13 @@ async def tracking_commit_node(state: StoryState, **deps: Any) -> dict:
         emotion_arc={"start": "neutral", "end": "tense", "intensity": "medium"},
     )
     snap = await TrackingService(session).commit(project_id, tx)
-    stages = _complete_stage(state, "quality_scan")
-    stages = stages + [
-        {
-            "name": "tracking_commit",
-            "status": "running",
-            "started_at": _now(),
-            "notes": f"chapter_id={snap.chapter_id} wordcount={snap.final_wordcount}",
-        }
-    ]
     return {
         "chapter_id": snap.chapter_id,
         "state_revision": snap.state_revision,
         "final_wordcount": snap.final_wordcount,
         "summary_text": summary,
         "chapter_hook": hook,
-        "stages": stages,
+        "stages": [_stage("tracking_commit", notes=f"chapter_id={snap.chapter_id} wordcount={snap.final_wordcount}")],
     }
 
 
@@ -199,6 +151,7 @@ def build_write_long_graph():
     g.add_node("wordcount_checkpoint", wordcount_checkpoint_node)
     g.add_node("quality_scan", quality_scan_node)
     g.add_node("tracking_commit", tracking_commit_node)
+
     g.set_entry_point("route_scenario")
     g.add_edge("route_scenario", "write_prep")
     g.add_edge("write_prep", "write_prose")
@@ -206,4 +159,5 @@ def build_write_long_graph():
     g.add_edge("wordcount_checkpoint", "quality_scan")
     g.add_edge("quality_scan", "tracking_commit")
     g.add_edge("tracking_commit", END)
+
     return g.compile(name="write_long")

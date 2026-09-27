@@ -1,17 +1,53 @@
-"""Shared LangGraph state — 跨子图共享的状态.
+"""Shared LangGraph state — 跨子图共享 + LangGraph reducer.
 
-字段分组：
-- session / project：路由 + project 上下文
-- intent / dispatch：意图识别 + 分发
-- write_long / write_short：写章节共用
-- scan：扫榜专用
-- completion：完成态
+reducer 策略：
+- stages：用自定义 _append_unique_stages —— 按 (name, started_at) 去重
+  防止 subgraph-as-node 时父图 stages 被子图重复累积（子图 state 含父 stages）
+- errors / open_conflicts / foreshadowing_changes / characters_in_scene：
+  operator.add —— 简单 list 追加
+- 其他字段：默认"最后一次写入为准"（无 reducer）
 """
 
 from __future__ import annotations
 
+import operator
 from datetime import datetime
-from typing import Any, Literal, TypedDict
+from typing import Annotated, Any, Literal, TypedDict
+
+
+# ---------------------------------------------------------------------------
+# Custom reducer for stages
+# ---------------------------------------------------------------------------
+
+
+def _append_unique_stages(old: list, new: list) -> list:
+    """按 (name, started_at) 去重追加 stage events.
+
+    为什么需要：subgraph-as-node 模式下，子图节点的 state 从父 state 继承，
+    子图内部累积 stages 会**包含**父图已有的 events。如果父子都用 operator.add，
+    父图 patch 时会把这些 events 再次 append，stages 列表出现重复。
+
+    解决：去重 by (name, started_at)。非 dict 元素（如字符串）直接追加不做去重。
+    """
+    seen: set = set()
+    for e in old:
+        if isinstance(e, dict):
+            seen.add((e.get("name"), e.get("started_at")))
+    out = list(old)
+    for e in new:
+        if isinstance(e, dict):
+            key = (e.get("name"), e.get("started_at"))
+            if key not in seen:
+                seen.add(key)
+                out.append(e)
+        else:
+            out.append(e)
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Status types
+# ---------------------------------------------------------------------------
 
 
 class StageStatus(TypedDict, total=False):
@@ -23,6 +59,13 @@ class StageStatus(TypedDict, total=False):
 
 
 class StoryState(TypedDict, total=False):
+    # ----- 累积字段（带 reducer）-----
+    stages: Annotated[list, _append_unique_stages]
+    errors: Annotated[list[str], operator.add]
+    open_conflicts: Annotated[list[str], operator.add]
+    foreshadowing_changes: Annotated[list[dict], operator.add]
+    characters_in_scene: Annotated[list[dict], operator.add]
+
     # ----- session -----
     request_id: str
     user_input: str
@@ -32,10 +75,11 @@ class StoryState(TypedDict, total=False):
     project_slug: str
 
     # ----- intent / dispatch -----
-    intent: str               # write_long / write_short / scan / review / analyze / memory_query / unknown
-    graph_invoked: str        # 实际调用的子图名
-    supported: bool           # 该 intent 当前是否已实现
-    notice: str | None        # 预留 intent 的友好提示
+    intent: str
+    explicit_scenario: str  # router 输入：auto / write_long / write_short / scan
+    graph_invoked: str
+    supported: bool
+    notice: str | None
 
     # ----- write (long / short 共用) -----
     length: Literal["long", "short"]
@@ -45,17 +89,14 @@ class StoryState(TypedDict, total=False):
     wordcount_report: dict
 
     # ----- write 长篇 专用 -----
-    recall: dict              # ContextService 召回包
+    recall: dict
     quality_report: dict
     chapter_hook: str
     summary_text: str
     continuity_to_next: str
-    open_conflicts: list[str]
     location: str
     pov: str
     emotion_arc: dict
-    characters_in_scene: list[dict]
-    foreshadowing_changes: list[dict]
 
     # ----- scan 专用 -----
     platforms: list[str]
@@ -67,7 +108,5 @@ class StoryState(TypedDict, total=False):
     chapter_id: int | None
     state_revision: int
     final_wordcount: int | None
-    stages: list[StageStatus]
     report: str
-    errors: list[str]
     extra: dict[str, Any]
