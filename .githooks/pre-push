@@ -39,7 +39,7 @@ while read -r local_ref local_sha remote_ref remote_sha; do
     echo ""
     echo "需要更新 main 时："
     echo "  - 推荐：开 PR 让 dev → main（GitHub 网页操作）"
-    echo "  - 或：临时禁用本 hook（git push --no-verify）"
+    echo "  - 或：临时绕过本 hook（git push --no-verify）"
     exit 1
 done
 
