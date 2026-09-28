@@ -15,11 +15,12 @@ const result = ref<RouterResponse | null>(null)
 const error = ref<string | null>(null)
 
 // 拆分 router 的 stages：先 intent 阶段，再子图阶段
+// 锚点用后端 router 节点唯一 emit 的 'intent_router'（不依赖任何额外 stage）
 const splitStages = computed(() => {
   if (!result.value) return { router: [], sub: [] }
   const all = result.value.stages
-  const idx = all.findIndex((s) => s.name === 'dispatch')
-  if (idx === -1) return { router: all, sub: [] }
+  const idx = all.findIndex((s) => s.name === 'intent_router')
+  if (idx === -1) return { router: [], sub: all }  // 防护：没找到则全部当作子图
   return { router: all.slice(0, idx + 1), sub: all.slice(idx + 1) }
 })
 
