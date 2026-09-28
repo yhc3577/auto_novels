@@ -169,11 +169,16 @@ auto_novels/
 | Vue 3 SPA（建项目 + 写章节 + 看 stages）| ✓ |
 | docker-compose 一键起 + 本地开发模式 | ✓ |
 | Mock LLM（无需 API key）| ✓ |
-| 真实 LLM 切换（Anthropic / OpenAI）| ✓ |
+| 真实 LLM 切换（Anthropic / OpenAI / NewAPI）| ✓ |
+| **write_long 7 节点管线**（设计-写作-校验 闭环 + 人工审核）| ✓ |
+| **3 个真 LLM agent**（writer / designer / consistency）| ✓ |
+| **确定性质量门禁**（字数 / 标点 / AI 词 / 退化 / 禁用词）| ✓ |
+| **细纲校验**（beats 完整性 + 卷契约 + ReferenceGate）| ✓ |
 | 完整 19 张表 ORM 映射 | △（demo 只 3 张核心表）|
 | Alembic 迁移 | △（当前用 docker initdb 自动应用 SQL）|
-| RouterGraph / AnalyzeGraph / ReviewGraph | ✗（demo 只 WriteGraph 4 节点）|
-| Reference Gate / QualityService | ✗（demo 跳过）|
+| world_outlines / character_roster / volume_outline 表 | △（ContextService 已预留字段，等 schema 落地） |
+| RouterGraph / AnalyzeGraph / ReviewGraph | ✗（demo 只 WriteGraph + Router） |
 | Checkpointer / Redis 热层 | ✗ |
+| interrupt_human 真暂停（langgraph interrupt_before）| △（demo 用 flag，API 层可检测） |
 
 详见 [`docs/langgraph-status-v0.1.md`](./docs/langgraph-status-v0.1.md)。
