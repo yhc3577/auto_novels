@@ -5,7 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, status
 from sqlalchemy import select
 
-from app.deps import SessionDep
+from app.deps import CurrentUserDep, SessionDep
 from app.models.chapter import Chapter
 from app.repositories.project import ProjectRepository
 from app.schemas.project import ProjectCreate, ProjectOut
@@ -28,7 +28,9 @@ def _to_out(p, chapter_count: int) -> ProjectOut:
 
 
 @router.post("", response_model=ProjectOut, status_code=status.HTTP_201_CREATED)
-async def create_project(payload: ProjectCreate, session: SessionDep) -> ProjectOut:
+async def create_project(
+    payload: ProjectCreate, session: SessionDep, _user: CurrentUserDep
+) -> ProjectOut:
     repo = ProjectRepository(session)
     project = await repo.create(
         slug=payload.slug,
@@ -41,7 +43,9 @@ async def create_project(payload: ProjectCreate, session: SessionDep) -> Project
 
 
 @router.get("", response_model=list[ProjectOut])
-async def list_projects(session: SessionDep, limit: int = 50, offset: int = 0) -> list[ProjectOut]:
+async def list_projects(
+    session: SessionDep, _user: CurrentUserDep, limit: int = 50, offset: int = 0
+) -> list[ProjectOut]:
     repo = ProjectRepository(session)
     projects = await repo.list_all(limit=limit, offset=offset)
     # 批量查每个项目的章节数
@@ -59,7 +63,9 @@ async def list_projects(session: SessionDep, limit: int = 50, offset: int = 0) -
 
 
 @router.get("/{project_id}", response_model=ProjectOut)
-async def get_project(project_id: int, session: SessionDep) -> ProjectOut:
+async def get_project(
+    project_id: int, session: SessionDep, _user: CurrentUserDep
+) -> ProjectOut:
     repo = ProjectRepository(session)
     project = await repo.get(project_id)
     from sqlalchemy import func as sqlfunc

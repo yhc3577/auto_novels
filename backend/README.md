@@ -31,15 +31,22 @@ JWT 密钥（默认 dev 占位）：生产环境务必设 `JWT_SECRET=<strong-ra
 
 ## 1.1 Auth 端点
 
-| 端点 | 方法 | 说明 |
-|------|------|------|
-| `/api/auth/register` | POST | 用户名 + 密码注册，返 JWT token (HS256, 7 天过期) |
-| `/api/auth/login` | POST | 用户名 + 密码登录，返 JWT token |
+| 端点 | 方法 | 需要鉴权 | 说明 |
+|------|------|---------|------|
+| `/api/auth/register` | POST | ❌ | 用户名 + 密码注册，返 JWT token (HS256, 7 天过期) |
+| `/api/auth/login` | POST | ❌ | 用户名 + 密码登录，返 JWT token |
+| `/api/auth/me` | GET | ✅ | 验证 token 还有效，返当前 user |
+| `/api/healthz` | GET | ❌ | 健康检查（监控系统用）|
+| `/api/projects` | * | ✅ | 项目 CRUD（list / get / create）|
+| `/api/write` | POST | ✅ | 触发 write_long 图 |
+| `/api/router` | POST | ✅ | 统一意图识别入口 |
 
 请求体：`{"username": "...", "password": "..."}`
 响应：`{"token": "eyJ...", "user_id": 1, "username": "...", "created_at": "..."}`
 
 存储：bcrypt 哈希（cost=12），密码限 72 字节。
+
+鉴权方式：所有需鉴权的端点要带 `Authorization: Bearer <token>` header。前端 axios 已在 `services/api.ts` 拦截器里自动注入；401 自动清理 localStorage 并跳 `/login`。
 
 ## 2. 目录速查（5 层 + 横向）
 

@@ -9,7 +9,7 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from app.agents import get_llm_factory
-from app.deps import SessionDep
+from app.deps import CurrentUserDep, SessionDep
 from app.graphs import get_registry
 from app.repositories.project import ProjectRepository
 from app.schemas.writing import StageStatus, WriteRequest, WriteResponse
@@ -18,7 +18,9 @@ router = APIRouter(prefix="/api/write", tags=["write"])
 
 
 @router.post("", response_model=WriteResponse)
-async def write_chapter(payload: WriteRequest, session: SessionDep) -> WriteResponse:
+async def write_chapter(
+    payload: WriteRequest, session: SessionDep, _user: CurrentUserDep
+) -> WriteResponse:
     project = await ProjectRepository(session).get(payload.project_id)
 
     deps = {

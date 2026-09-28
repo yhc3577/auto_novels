@@ -5,7 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from app.agents import get_llm_factory
-from app.deps import SessionDep
+from app.deps import CurrentUserDep, SessionDep
 from app.graphs import get_registry
 from app.repositories.project import ProjectRepository
 from app.schemas.routing import RouterRequest, RouterResponse
@@ -15,7 +15,9 @@ router = APIRouter(prefix="/api/router", tags=["router"])
 
 
 @router.post("", response_model=RouterResponse)
-async def invoke_router(payload: RouterRequest, session: SessionDep) -> RouterResponse:
+async def invoke_router(
+    payload: RouterRequest, session: SessionDep, _user: CurrentUserDep
+) -> RouterResponse:
     # 校验项目存在
     project = await ProjectRepository(session).get(payload.project_id)
 

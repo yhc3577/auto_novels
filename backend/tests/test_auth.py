@@ -261,3 +261,100 @@ def test_settings_jwt_secret_default():
     assert settings.jwt_secret
     assert settings.jwt_algorithm == "HS256"
     assert settings.jwt_expire_minutes >= 60
+
+
+# ===========================================================================
+# JWT 中间件 (require_current_user) — 验证各业务端点都需要鉴权
+# ===========================================================================
+
+
+def _register_and_get_token(client: TestClient) -> str:
+    """辅助：注册一个临时用户并返回 JWT."""
+    import uuid
+    uname = f"jwt_{uuid.uuid4().hex[:8]}"
+    r = client.post(
+        "/api/auth/register",
+        json={"username": uname, "password": "secret123"},
+    )
+    assert r.status_code == 201, r.text
+    return r.json()["token"]
+
+
+def test_api_me_without_token_401(client: TestClient):
+    """GET /api/auth/me 无 token → 401."""
+    r = client.get("/api/auth/me")
+    assert r.status_code == 401
+    assert r.json()["error"]["code"] == "authentication_error"
+
+
+def test_api_me_with_valid_token_200(client: TestClient):
+    """GET /api/auth/me 携正确 token → 200 + 用户信息."""
+    token = _register_and_get_token(client)
+    r = client.get("/api/auth/me", headers={"Authorization": f"Bearer {token}"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["username"].startswith("jwt_")
+    assert body["user_id"] > 0
+
+
+def test_api_me_with_garbage_token_401(client: TestClient):
+    """携乱七八糟的 token → 401."""
+    r = client.get("/api/auth/me", headers={"Authorization": "Bearer not.a.jwt"})
+    assert r.status_code == 401
+
+
+def test_api_me_with_malformed_header_401(client: TestClient):
+    """Header 不是 Bearer 开头 → 401."""
+    r = client.get("/api/auth/me", headers={"Authorization": "Basic xxx"})
+    assert r.status_code == 401
+    assert "missing or malformed" in r.json()["error"]["message"].lower() or "bearer" in r.json()["error"]["message"].lower()
+
+
+def test_api_projects_requires_auth(client: TestClient):
+    """GET /api/projects 无 token → 401."""
+    r = client.get("/api/projects")
+    assert r.status_code == 401
+
+
+def test_api_projects_with_auth_ok(client: TestClient):
+    """携 token 列出项目（可为空）→ 200."""
+    token = _register_and_get_token(client)
+    r = client.get("/api/projects", headers={"Authorization": f"Bearer {token}"})
+    assert r.status_code == 200
+    assert isinstance(r.json(), list)
+
+
+def test_api_write_requires_auth(client: TestClient):
+    """POST /api/write 无 token → 401."""
+    r = client.post(
+        "/api/write",
+        json={"project_id": 1, "user_input": "x", "target_wordcount": 100},
+    )
+    assert r.status_code == 401
+
+
+def test_api_router_requires_auth(client: TestClient):
+    """POST /api/router 无 token → 401."""
+    r = client.post(
+        "/api/router",
+        json={"project_id": 1, "user_input": "x", "explicit_scenario": "auto"},
+    )
+    assert r.status_code == 401
+
+
+def test_api_healthz_does_not_require_auth(client: TestClient):
+    """/api/healthz 不应被鉴权拦截（监控系统要能访问）."""
+    r = client.get("/api/healthz")
+    assert r.status_code == 200
+
+
+def test_api_auth_login_does_not_require_auth(client: TestClient):
+    """/api/auth/login 不应被鉴权拦截（不然永远登不上）."""
+    r = client.post(
+        "/api/auth/login",
+        json={"username": "nobody123", "password": "somepassword"},
+    )
+    # 这里不是 401（鉴权失败），而是 401（用户不存在）—— 状态码巧合，
+    # 但实际 response body 不一样。
+    assert r.status_code == 401
+    assert "invalid username or password" in r.json()["error"]["message"]
