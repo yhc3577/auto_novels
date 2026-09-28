@@ -3,6 +3,11 @@ __pycache__/
 *.py[codz]
 *$py.class
 
+# Node / npm (frontend)
+node_modules/
+package-lock.json
+frontend/dist/
+
 # C extensions
 *.so
 

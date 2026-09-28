@@ -1,34 +1,49 @@
-# 多阶段构建：node 编译 → nginx 托管
-
-# ---- build stage ----
-FROM node:20-alpine AS build
+# ── Stage 1: 构建 Vue 应用 ─────────────────────────────────
+FROM node:20-alpine AS builder
 
 WORKDIR /app
 
-COPY package.json ./
-# 没有 lockfile，直接装依赖
-RUN npm install --no-audit --no-fund
+COPY package.json package-lock.json ./
+RUN npm ci
 
 COPY . .
 RUN npm run build
 
-# ---- runtime stage ----
+# ── Stage 2: Nginx 静态服务 ─────────────────────────────────
 FROM nginx:alpine
 
-# 拷构建产物
-COPY --from=build /app/dist /usr/share/nginx/html
+# 拷贝构建产物
+COPY --from=builder /app/dist /usr/share/nginx/html
 
-# nginx 配置（前端只服务静态资源）
+# Nginx 配置：API 反向代理 + SPA 路由
 RUN echo 'server { \
     listen 80; \
     server_name _; \
     root /usr/share/nginx/html; \
     index index.html; \
-    location / { try_files $uri $uri/ /index.html; } \
+    \
+    # API 反向代理到 backend \
+    location /api/ { \
+        proxy_pass http://backend:8082; \
+        proxy_set_header Host $host; \
+        proxy_set_header X-Real-IP $remote_addr; \
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for; \
+        proxy_set_header X-Forwarded-Proto $scheme; \
+        proxy_read_timeout 300s; \
+    } \
+    \
+    # SPA fallback \
+    location / { \
+        try_files $uri $uri/ /index.html; \
+    } \
+    \
+    # 静态资源缓存 \
+    location /assets/ { \
+        expires 1y; \
+        add_header Cache-Control "public, immutable"; \
+    } \
 }' > /etc/nginx/conf.d/default.conf
 
 EXPOSE 80
-HEALTHCHECK --interval=10s --timeout=3s --retries=10 \
-  CMD wget -qO- http://localhost/ >/dev/null || exit 1
 
 CMD ["nginx", "-g", "daemon off;"]
