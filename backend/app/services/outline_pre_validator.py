@@ -12,11 +12,16 @@
     "feedback": list[str],   # 退回 chapter_design 时注入 prompt
     "checks":   {<name>: {"passed": bool, "details": str}}
 }
+
+模块级 @tool：
+- validate_outline_pre_write  —— LangChain @tool，agent 可 bind_tools
 """
 
 from __future__ import annotations
 
-from app.services.outline_validator import extract_keywords
+from langchain_core.tools import tool
+
+from app.services.outline_validator import _impl_extract_keywords
 
 
 class OutlinePreValidator:
@@ -79,7 +84,7 @@ class OutlinePreValidator:
                 + [outline.get("closing_hook", "") or ""]
             )
             # 抽取 objectives 的所有中文子串；命中任一即算覆盖
-            all_kw = extract_keywords(objectives)
+            all_kw = _impl_extract_keywords(objectives)
             hits_kw = [k for k in all_kw if k in outline_text]
             if all_kw and not hits_kw:
                 issues.append("未呼应卷大纲的关键目标")
@@ -119,4 +124,39 @@ class OutlinePreValidator:
         }
 
 
-__all__ = ["OutlinePreValidator"]
+# ---------------------------------------------------------------------------
+# LangChain @tool 公开版（供 LLM agent bind_tools 调用）
+# ---------------------------------------------------------------------------
+
+
+@tool
+def validate_outline_pre_write(
+    outline: dict,
+    volume_outline: dict | None = None,
+    character_roster: list | None = None,
+    known_locations: list | None = None,
+) -> dict:
+    """对【章节细纲】运行 3 项写前检查：beats 完整性 + 卷大纲契约 + ReferenceGate。
+
+    Args:
+        outline: 章节细纲 dict（至少含 key_beats 列表）。
+        volume_outline: 卷级大纲 dict（可选，含 objectives 字段）。用于检查细纲是否呼应卷目标。
+        character_roster: 项目人物 roster（可选，list[dict]，每项至少含 name 字段）。
+        known_locations: 已知场景地点列表（可选，list[str]）。
+
+    Returns:
+        dict 含 4 个字段：
+            - passed (bool): 综合是否通过（3 项检查全过）
+            - issues (list[str]): 问题清单
+            - feedback (list[str]): 退回 chapter_design 时注入 prompt 的反馈
+            - checks (dict): 每项检查的详细结果
+    """
+    return OutlinePreValidator().validate(
+        outline=outline,
+        volume_outline=volume_outline,
+        character_roster=character_roster,
+        known_locations=known_locations,
+    )
+
+
+__all__ = ["OutlinePreValidator", "validate_outline_pre_write"]

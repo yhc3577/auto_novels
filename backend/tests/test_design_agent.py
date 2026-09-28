@@ -400,3 +400,196 @@ def test_chapter_design_emits_3_stages():
     assert "route_scenario" in stage_names
     assert "write_prep" in stage_names
     assert "chapter_design" in stage_names
+
+
+# ===========================================================================
+# LangChain @tool 验证
+# ===========================================================================
+
+
+from langchain_core.tools import BaseTool
+
+
+def test_all_tools_are_base_tool_instances():
+    """所有 @tool 装饰的函数必须是 BaseTool 实例."""
+    from app.services import (
+        measure_wordcount,
+        checkpoint_wordcount,
+        extract_keywords,
+        validate_outline,
+        validate_outline_pre_write,
+        check_prose_post_write,
+    )
+    for tool_fn in (
+        measure_wordcount, checkpoint_wordcount, extract_keywords,
+        validate_outline, validate_outline_pre_write, check_prose_post_write,
+    ):
+        assert isinstance(tool_fn, BaseTool), (
+            f"{tool_fn.name} is not a BaseTool: {type(tool_fn)}"
+        )
+
+
+def test_tool_names_unique():
+    """所有 @tool 的 name 必须唯一（agent bind_tools 时不能冲突）."""
+    from app.services import (
+        measure_wordcount, checkpoint_wordcount, extract_keywords,
+        validate_outline, validate_outline_pre_write, check_prose_post_write,
+    )
+    names = [t.name for t in (
+        measure_wordcount, checkpoint_wordcount, extract_keywords,
+        validate_outline, validate_outline_pre_write, check_prose_post_write,
+    )]
+    assert len(names) == len(set(names)), f"duplicate tool names: {names}"
+
+
+def test_tools_have_descriptions():
+    """@tool 必须有 description（LLM 用来理解工具用途）."""
+    from app.services import (
+        measure_wordcount, checkpoint_wordcount, extract_keywords,
+        validate_outline, validate_outline_pre_write, check_prose_post_write,
+    )
+    for tool_fn in (
+        measure_wordcount, checkpoint_wordcount, extract_keywords,
+        validate_outline, validate_outline_pre_write, check_prose_post_write,
+    ):
+        assert tool_fn.description, f"{tool_fn.name} has no description"
+        assert len(tool_fn.description) >= 10, (
+            f"{tool_fn.name} description too short: {tool_fn.description!r}"
+        )
+
+
+def test_tools_have_args_schema():
+    """@tool 必须能生成 args_schema（LLM 才能生成正确调用参数）.
+
+    schema 顶层就是 properties dict（单 arg tool）或 {properties: {...}, required: [...]}（多 arg）。
+    """
+    from app.services import (
+        measure_wordcount, checkpoint_wordcount, extract_keywords,
+        validate_outline, validate_outline_pre_write, check_prose_post_write,
+    )
+    for tool_fn in (
+        measure_wordcount, checkpoint_wordcount, extract_keywords,
+        validate_outline, validate_outline_pre_write, check_prose_post_write,
+    ):
+        schema = tool_fn.args
+        assert schema is not None, f"{tool_fn.name} has no args schema"
+        # schema 顶层直接是 properties（单 arg 时）；或者 {properties: ..., required: ...}
+        assert schema, f"{tool_fn.name} schema is empty"
+
+
+def test_extract_keywords_tool_invocation():
+    """@tool extract_keywords 可以通过 .invoke() 调用，行为与 _impl 一致."""
+    from app.services import extract_keywords
+    from app.services.outline_validator import _impl_extract_keywords
+
+    beat = "雾港导师真相"
+    # .invoke() 用 dict 参数
+    via_tool = extract_keywords.invoke({"beat": beat})
+    via_impl = _impl_extract_keywords(beat)
+    assert via_tool == via_impl
+    assert len(via_tool) > 0
+
+
+def test_measure_wordcount_tool_invocation():
+    from app.services import measure_wordcount
+    result = measure_wordcount.invoke({"text": "雾港 hello 夜 world"})
+    # CJK=3, ASCII=2 (hello + world) → total=5 (与 _impl 直接调用结果一致)
+    assert result == 5
+
+
+def test_checkpoint_wordcount_tool_invocation():
+    from app.services import checkpoint_wordcount
+    result = checkpoint_wordcount.invoke({"text": "啊" * 100, "target": 100})
+    assert result["passed"] is True
+    assert result["actual"] == 100
+
+
+def test_validate_outline_tool_invocation():
+    from app.services import validate_outline
+    outline = {
+        "opening_hook": "雨夜的雾港站台",
+        "key_beats": ["发现银环女子", "旧公寓密会"],
+        "closing_hook": "银环女子留下钥匙",
+    }
+    prose = (
+        "雨夜的雾港站台，江禾看见了银环女子。\n"
+        "在旧公寓密会后他们发现手稿。\n"
+        "末了，银环女子留下钥匙。"
+    )
+    result = validate_outline.invoke({
+        "outline": outline, "prose": prose, "target_wordcount": 30,
+    })
+    assert "passed" in result
+    assert "score" in result
+    assert "feedback" in result
+    assert "checks" in result
+
+
+def test_validate_outline_pre_write_tool_invocation():
+    from app.services import validate_outline_pre_write
+    result = validate_outline_pre_write.invoke({"outline": _FALLBACK_OUTLINE})
+    assert result["passed"] is True
+    assert "checks" in result
+    assert "beats_completeness" in result["checks"]
+
+
+def test_check_prose_post_write_tool_invocation():
+    from app.services import check_prose_post_write
+    prose = (
+        "雨夜的雾港站台，江禾提着黑色皮箱走出列车。\n\n"
+        "他撞见了银环女子。她把黑伞递过来，江禾没接。\n\n"
+        "两人走进附近的咖啡馆，她低声说了三句话。\n\n"
+        "末了，银环女子留下半枚钥匙：别去港区码头。"
+    )
+    result = check_prose_post_write.invoke({
+        "prose": prose, "target_wordcount": 100,
+    })
+    assert "passed" in result
+    assert "checks" in result
+    assert "punctuation" in result["checks"]
+
+
+def test_internal_caller_uses_impl_path():
+    """内部代码（OutlineValidator._beats_coverage）走 _impl_* 快速路径，不依赖 @tool."""
+    v = OutlineValidator()
+    # 这条调用路径内部走 _impl_extract_keywords，不会触发 @tool.invoke 的开销
+    coverage = v._beats_coverage(["雾港导师真相"], "这是一个雾港的导师失踪故事")
+    assert coverage == 1.0
+
+
+def test_tools_have_valid_openai_function_schema():
+    """验证每个 @tool 都能正确生成 OpenAI function calling schema.
+
+    不依赖具体 LLM 实现 —— 用 langchain 自带的 StructuredTool.convert_to_openai_function。
+    """
+    from app.services import (
+        measure_wordcount, checkpoint_wordcount, extract_keywords,
+        validate_outline, validate_outline_pre_write, check_prose_post_write,
+    )
+    tools = [
+        measure_wordcount, checkpoint_wordcount, extract_keywords,
+        validate_outline, validate_outline_pre_write, check_prose_post_write,
+    ]
+    for tool_fn in tools:
+        try:
+            schema = tool_fn.args_schema  # Pydantic model class
+            assert schema is not None
+            assert schema.model_fields, f"{tool_fn.name} has no model fields"
+        except Exception as e:
+            pytest.fail(f"{tool_fn.name} schema generation failed: {e}")
+
+
+def test_tools_have_distinct_names_for_agent_binding():
+    """模拟 bind_tools 场景：tools 列表里 name 不能冲突."""
+    from app.services import (
+        measure_wordcount, checkpoint_wordcount, extract_keywords,
+        validate_outline, validate_outline_pre_write, check_prose_post_write,
+    )
+    tools = [
+        measure_wordcount, checkpoint_wordcount, extract_keywords,
+        validate_outline, validate_outline_pre_write, check_prose_post_write,
+    ]
+    tool_dict = {t.name: t for t in tools}
+    assert len(tool_dict) == len(tools), (
+        f"name 冲突: {[t.name for t in tools]}"
+    )

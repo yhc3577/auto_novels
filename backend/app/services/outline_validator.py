@@ -26,11 +26,18 @@
 - 字数：复用 WordcountService.checkpoint
 
 后续可扩展：接 LLM-as-judge 作可选升级，但默认走规则（速度快、可解释）。
+
+模块级工具函数：
+- extract_keywords       —— LangChain @tool
+- validate_outline       —— LangChain @tool
+两者都可用 `bind_tools([...])` 交给 LLM agent 调用。
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+
+from langchain_core.tools import tool
 
 from app.services.wordcount import WordcountService
 
@@ -125,7 +132,8 @@ class OutlineValidator:
             return 1.0
         hits = 0
         for beat in beats:
-            keywords = extract_keywords(beat)
+            # 使用 _impl_extract_keywords 快速路径（不走 @tool.invoke 的开铺）
+            keywords = _impl_extract_keywords(beat)
             if any(kw in prose for kw in keywords):
                 hits += 1
         return hits / len(beats)
@@ -151,14 +159,19 @@ class OutlineValidator:
 
 
 # ---------------------------------------------------------------------------
-# 模块级工具函数（让 graph / 测试都能直接调用，不必构造 OutlineValidator 实例）
+# 模块级 LangChain @tool（让 LLM agent 可以 bind_tools 调用）
+# ---------------------------------------------------------------------------
+#
+# 约定：
+# - 私有函数 _impl_* 走原 Python 函数路径（快，供内部代码调用）
+# - @tool 装饰的公开名供 agent bind_tools().invoke(...) 使用
+# - 两套实现都委托同一份 impl，保证结果一致
 # ---------------------------------------------------------------------------
 
 
-def extract_keywords(beat: str) -> list[str]:
-    """从一句 beat 里抠出可能用于匹配的中文词串.
+def _impl_extract_keywords(beat: str) -> list[str]:
+    """私实现：拆出所有连续中文 run，再从每个 run 生成 ≥2 字子串。
 
-    策略：拆出所有连续中文 run，再从每个 run 生成 ≥2 字子串。
     返回所有子串（set 去重），开销极低（典型 beat 产生几十个子串）。
     """
     if not beat:
@@ -185,14 +198,41 @@ def extract_keywords(beat: str) -> list[str]:
     return sorted(keywords, key=len, reverse=True)
 
 
+@tool
+def extract_keywords(beat: str) -> list[str]:
+    """从一句 beat 里抠出所有 ≥2 字的连续中文子串，可用于在 prose 里做 fuzzy 匹配.
+
+    Args:
+        beat: 章节细纲的一句话（任意中文文本）。
+
+    Returns:
+        list[str]: 该句产生的全部可能子串（按长度倒序），不包含 ASCII / 1 字词。
+    """
+    return _impl_extract_keywords(beat)
+
+
+@tool
 def validate_outline(
-    *,
     outline: dict,
     prose: str,
     target_wordcount: int,
     tolerance: float = 0.2,
 ) -> dict:
-    """便利函数：单次校验，无需持有 OutlineValidator 实例."""
+    """对【细纲 × 正文】运行 4 项一致性检查：开场钩子命中 + 关键节拍覆盖 + 结尾钩子命中 + 字数。
+
+    Args:
+        outline: 章节细纲 dict，至少包含 opening_hook / key_beats / closing_hook。
+        prose: 章节正文（markdown）。
+        target_wordcount: 目标字数（与 ±tolerance 一起决定 length_ok）。
+        tolerance: 字数容差比例，默认 0.2（20%）。
+
+    Returns:
+        dict 含 5 个字段：
+            - passed (bool): 综合是否通过 (score >= 0.7)
+            - score (float): 0~1 综合得分
+            - feedback (list[str]): 未通过项的修改建议
+            - checks (dict): 每项检查的详细结果
+    """
     return OutlineValidator().validate(
         outline=outline,
         prose=prose,
@@ -201,4 +241,8 @@ def validate_outline(
     )
 
 
-__all__ = ["OutlineValidator", "extract_keywords", "validate_outline"]
+__all__ = [
+    "OutlineValidator",
+    "extract_keywords",
+    "validate_outline",
+]

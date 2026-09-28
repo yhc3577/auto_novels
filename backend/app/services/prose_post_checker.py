@@ -25,6 +25,8 @@ from __future__ import annotations
 import re
 from collections import Counter
 
+from langchain_core.tools import tool
+
 from app.services.wordcount import WordcountService
 
 
@@ -180,4 +182,40 @@ class ProsePostChecker:
         return repeated / len(ngrams)
 
 
-__all__ = ["ProsePostChecker"]
+__all__ = ["ProsePostChecker", "check_prose_post_write"]
+
+
+# ---------------------------------------------------------------------------
+# LangChain @tool 公开版（供 LLM agent bind_tools 调用）
+# ---------------------------------------------------------------------------
+
+
+@tool
+def check_prose_post_write(
+    prose: str,
+    target_wordcount: int,
+    ai_markers: list[str] | None = None,
+    banned_words: list[str] | None = None,
+) -> dict:
+    """对【章节正文】运行 6 项写后确定性门禁：字数 + 标点归一 + AI 词 + 退化 + 禁用词 + 长度下限。
+
+    Args:
+        prose: 章节正文 markdown。
+        target_wordcount: 目标字数（实际字数 ±20% 视为通过）。
+        ai_markers: AI 词标记列表（可选，默认 4 个常见 AI 套话）。
+        banned_words: 禁用词列表（可选，默认空）。
+
+    Returns:
+        dict 含 5 个字段：
+            - passed (bool): 6 项检查是否全部通过
+            - issues (list[str]): 问题清单
+            - feedback (list[str]): 退回 write_prose 时注入 prompt 的反馈
+            - checks (dict): 每项检查的详细结果
+            - normalized_prose (str): 标点归一后的正文（如果无变化则等于原 prose）
+    """
+    checker = ProsePostChecker(banned_words=banned_words)
+    return checker.check(
+        prose=prose,
+        target_wordcount=target_wordcount,
+        ai_markers=tuple(ai_markers) if ai_markers else None,
+    )
