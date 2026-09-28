@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 
 import pytest
+from langgraph.graph import END
 
 from app.agents.chapter_designer import (
     ChapterDesigner,
@@ -13,12 +14,9 @@ from app.agents.chapter_designer import (
 )
 from app.agents.prose_consistency import ProseConsistencyChecker, _FALLBACK
 from app.graphs.write_long import (
-    MAX_DESIGN_ITERATIONS,
-    MAX_POST_WRITE_RETRIES,
     MAX_PRE_WRITE_RETRIES,
-    _route_after_consistency,
-    _route_after_post_write_check,
     _route_after_pre_write_validate,
+    _route_after_validate_prose,
     build_write_long_graph,
 )
 from app.services.outline_pre_validator import OutlinePreValidator
@@ -30,49 +28,48 @@ from app.services.outline_validator import OutlineValidator, extract_keywords
 # ===========================================================================
 
 
-def test_graph_has_7_business_nodes():
+def test_graph_has_4_business_nodes():
+    """4 节点精简图：2 LLM + 2 服务."""
     g = build_write_long_graph()
     nodes = set(g.get_graph().nodes.keys())
 
-    # 7 个核心节点
+    # 4 个核心节点
     expected = {
         "chapter_design",          # LLM
-        "pre_write_validate",      # 服务
+        "pre_write_validate",      # 服务（路由点）
         "write_prose",             # LLM
-        "post_write_check",        # 服务
-        "prose_consistency",       # LLM
-        "interrupt_human",         # 服务
-        "tracking_commit",         # 服务
+        "validate_prose",          # 服务（合并：post_write + consistency + commit + interrupt）
     }
     assert expected.issubset(nodes), f"missing: {expected - nodes}"
+    # 旧节点应不再存在
+    legacy = {
+        "post_write_check", "prose_consistency", "interrupt_human", "tracking_commit",
+    }
+    assert not (legacy & nodes), f"旧节点残留: {legacy & nodes}"
 
 
 def test_graph_node_classification():
-    """3 个 LLM + 4 个服务节点 = 7 业务节点."""
+    """2 LLM + 2 服务 = 4 业务节点."""
     g = build_write_long_graph()
     nodes = sorted(n for n in g.get_graph().nodes.keys() if not n.startswith("__"))
-    assert len(nodes) == 7, f"expected 7 business nodes, got {len(nodes)}: {nodes}"
+    assert len(nodes) == 4, f"expected 4 business nodes, got {len(nodes)}: {nodes}"
 
-    llm_nodes = {"chapter_design", "write_prose", "prose_consistency"}
-    service_nodes = {"pre_write_validate", "post_write_check", "interrupt_human", "tracking_commit"}
+    llm_nodes = {"chapter_design", "write_prose"}
+    service_nodes = {"pre_write_validate", "validate_prose"}
     assert llm_nodes.issubset(set(nodes))
     assert service_nodes.issubset(set(nodes))
-    # LLM 与服务节点不重叠
     assert llm_nodes.isdisjoint(service_nodes)
 
 
-def test_graph_has_3_conditional_branches():
-    """确认 3 组条件边都在：
+def test_graph_has_2_conditional_branches():
+    """2 组条件边：
     - pre_write_validate → {write_prose, chapter_design}
-    - post_write_check → {write_prose, prose_consistency}
-    - prose_consistency → {chapter_design, interrupt_human, tracking_commit}
+    - validate_prose → {END, write_prose, chapter_design}
     """
     g = build_write_long_graph()
     edges = g.get_graph().edges
-    # langgraph 1.x: Edge(source, target, data, conditional) —— 4 元组
     cond_pairs: set[tuple[str, str]] = set()
     for edge in edges:
-        # edge 可能是 (src, dst) 或 (src, dst, data) 或 (src, dst, data, conditional)
         if len(edge) >= 4 and edge[3] is True:
             cond_pairs.add((edge[0], edge[1]))
         elif len(edge) == 3 and isinstance(edge[2], dict) and edge[2].get("conditional"):
@@ -81,11 +78,8 @@ def test_graph_has_3_conditional_branches():
     expected_pairs = {
         ("pre_write_validate", "write_prose"),
         ("pre_write_validate", "chapter_design"),
-        ("post_write_check", "write_prose"),
-        ("post_write_check", "prose_consistency"),
-        ("prose_consistency", "chapter_design"),
-        ("prose_consistency", "interrupt_human"),
-        ("prose_consistency", "tracking_commit"),
+        ("validate_prose", "write_prose"),
+        ("validate_prose", "chapter_design"),
     }
     missing = expected_pairs - cond_pairs
     assert not missing, f"missing conditional edges: {missing}\nactual: {cond_pairs}"
@@ -114,69 +108,283 @@ def test_route_pre_validate_fail_overflow():
     assert _route_after_pre_write_validate(state) == "write_prose"
 
 
-def test_route_post_check_pass():
+# ===========================================================================
+# validate_prose 决策矩阵（合并 post_write_check + consistency + commit + interrupt）
+# ===========================================================================
+
+
+def test_route_validate_prose_committed_ends():
+    """已 commit (chapter_id 存在) → END."""
+    state = {"chapter_id": 42, "post_write_check_report": {}, "consistency_report": {}}
+    assert _route_after_validate_prose(state) == END
+
+
+def test_route_validate_prose_post_write_fail_loops_to_write_prose():
+    state = {
+        "post_write_check_report": {"passed": False},
+        "consistency_report": {},
+        "design_iteration": 0,
+    }
+    assert _route_after_validate_prose(state) == "write_prose"
+
+
+def test_route_validate_prose_consistency_high_loops_to_chapter_design():
     state = {
         "post_write_check_report": {"passed": True},
-        "design_iteration": 0,
+        "consistency_report": {"severity": "high", "recommendation": "redo"},
+        "design_iteration": 1,
     }
-    assert _route_after_post_write_check(state) == "prose_consistency"
+    assert _route_after_validate_prose(state) == "chapter_design"
 
 
-def test_route_post_check_fail_rewrite():
+def test_route_validate_prose_low_severity_no_commit_marker_fallback_ends():
+    """低 severity 理论上 validate_prose 节点会调用 commit，但纯路由函数也该指向 END."""
     state = {
-        "post_write_check_report": {"passed": False},
-        "design_iteration": 0,
-    }
-    assert _route_after_post_write_check(state) == "write_prose"
-
-
-def test_route_post_check_fail_overflow():
-    state = {
-        "post_write_check_report": {"passed": False},
-        "design_iteration": MAX_DESIGN_ITERATIONS + 1,
-    }
-    assert _route_after_post_write_check(state) == "prose_consistency"
-
-
-def test_route_consistency_low_passes():
-    state = {
+        "post_write_check_report": {"passed": True},
         "consistency_report": {"severity": "low", "recommendation": "pass"},
-        "design_iteration": 5,
     }
-    assert _route_after_consistency(state) == "tracking_commit"
+    # 没设 chapter_id （fixture 状态），但路由只看 post/consistency
+    assert _route_after_validate_prose(state) == END
 
 
-def test_route_consistency_medium_passes():
-    state = {
-        "consistency_report": {"severity": "medium", "recommendation": "pass"},
-        "design_iteration": 5,
+# ===========================================================================
+# validate_prose_node 合并决策的端到端验证（模拟 6 路分支）
+# ===========================================================================
+
+
+_VALID_PROSE_PARAGRAPHS = [
+    "雨夜的雾港站台，江禾提着黑色皮箱走出列车。他撞见了银环女子。她把黑伞递过来，江禾没接。",
+    "在旧公寓的密会里，他们对坐于木桌两端。她的银色戒指映着烛光。",
+    "手稿上的墨迹已褪成深褐。她低声念出三句话：第一句是关于三年前那场火。",
+    "第二句是关于导师留下的半枚钥匙。第三句让江禾付了三年的咖啡。",
+    "末了，银环女子留下半枚钥匙：别去港区码头。江禾在漂泊大雨里撑开黑伞。",
+    "远处传来列车的汽笛声。他知道，这场雨不会在黎明前停下。",
+    "他站起身，将伞收回伞套里。咖啡馆的女招待在玻璃门后目送他离开。",
+    "黑色的皮箱里还有一封未拆的信。他知道那是留给自己的。",
+    "港口的灯火在雾里连成一条长线。他数着灯火的数目，这是他的习惯。",
+    "街角的老式电话亭亮着灯。他走过去拨了一个号码——空号。",
+    "他挂上电话，听见隔壁窗户里有人在哭泣。雾港的夜总是潮湿又漫长。",
+    "他从衣袋里摸出一枚旧币，是十五年前从导师那里得到的纪念。",
+]
+
+
+def _make_state(body: str | None = None, chapter_no: int = 1) -> dict:
+    # 默认 prose: 12 段多样化保证退化低 + 字数在 target±20%
+    if body is None:
+        body = "\n\n".join(_VALID_PROSE_PARAGRAPHS)
+    return {
+        "project_id": 1,
+        "chapter_no": chapter_no,
+        "target_wordcount": 400,  # 让 fixture prose (≈335) 在 +20% 范围内
+        "design_iteration": 0,
+        "pre_write_retry_count": 0,
+        "prose_draft": body,
+        "chapter_outline": _FALLBACK_OUTLINE,
+        "recall": {},
+        "stages": [],
+        "errors": [],
     }
-    assert _route_after_consistency(state) == "tracking_commit"
 
 
-def test_route_consistency_high_within_max_redo():
-    state = {
-        "consistency_report": {"severity": "high", "recommendation": "redo"},
-        "design_iteration": 1,  # <= MAX=1
-    }
-    assert _route_after_consistency(state) == "chapter_design"
+def test_validate_prose_post_write_fail_loops_to_write_prose(monkeypatch):
+    """post_write fail + iter<MAX → 返回状态不含 chapter_id → 路由会到 write_prose."""
+    from app.graphs import write_long as wl
+
+    class _FakeChecker:
+        def __init__(self, factory): pass
+        async def check(self, *, outline, prose):
+            return {"severity": "low", "recommendation": "pass", "deviation_score": 0.1, "issues": []}
+
+    class _FakeTracking:
+        def __init__(self, session): pass
+        async def commit(self, *a, **kw): raise AssertionError("不应 commit")
+
+    monkeypatch.setattr(wl, "build_prose_consistency_checker", lambda f: _FakeChecker(f))
+    monkeypatch.setattr(wl, "TrackingService", _FakeTracking)
+
+    # post_write 必败：过短 + AI 词 + 退化三重
+    prose = "综上所述" + "短" * 30  # 30 字严重不足 + AI 词
+    state = _make_state(body=prose)
+    import asyncio
+    result = asyncio.run(wl.validate_prose_node(state, session=None, llm_factory=None))
+    # 不应有 chapter_id (不 commit)
+    assert "chapter_id" not in result
+    # design_iteration 被自增
+    assert result["design_iteration"] == 1
+    # stages 里同时出现 post_write_check 和 validate_prose (决策)
+    stage_names = [s["name"] for s in result["stages"]]
+    assert "post_write_check" in stage_names
+    assert "validate_prose" in stage_names
+    assert "tracking_commit" not in stage_names
 
 
-def test_route_consistency_high_overflow_human_review():
-    state = {
-        "consistency_report": {"severity": "high", "recommendation": "human_review"},
-        "design_iteration": MAX_DESIGN_ITERATIONS + 1,
-    }
-    assert _route_after_consistency(state) == "interrupt_human"
+def test_validate_prose_low_severity_commits(monkeypatch):
+    """post_write pass + consistency low → 走 commit 路径."""
+    from app.graphs import write_long as wl
+
+    class _FakeChecker:
+        def __init__(self, factory): pass
+        async def check(self, *, outline, prose):
+            return {"severity": "low", "recommendation": "pass", "deviation_score": 0.1, "issues": []}
+
+    class _FakeSnap:
+        chapter_id = 77
+        state_revision = 5
+        final_wordcount = 999
+
+    class _FakeTracking:
+        def __init__(self, session): pass
+        async def commit(self, project_id, tx):
+            return _FakeSnap()
+
+    monkeypatch.setattr(wl, "build_prose_consistency_checker", lambda f: _FakeChecker(f))
+    monkeypatch.setattr(wl, "TrackingService", _FakeTracking)
+
+    state = _make_state()  # 完整长 prose
+    import asyncio
+    result = asyncio.run(wl.validate_prose_node(state, session=None, llm_factory=None))
+    # commit 了
+    assert result["chapter_id"] == 77
+    assert result["state_revision"] == 5
+    # stages 包含 3 个事件
+    stage_names = [s["name"] for s in result["stages"]]
+    assert "post_write_check" in stage_names
+    assert "prose_consistency" in stage_names
+    assert "tracking_commit" in stage_names
+    # 无 interrupt
+    assert "interrupt_pending" not in result
 
 
-def test_route_consistency_high_overflow_no_human():
-    state = {
-        "consistency_report": {"severity": "high", "recommendation": "redo"},
-        "design_iteration": MAX_DESIGN_ITERATIONS + 1,
-    }
-    # LLM 推荐 redo 但已耗尽次数 → best-effort 放行
-    assert _route_after_consistency(state) == "tracking_commit"
+def test_validate_prose_consistency_high_loops(monkeypatch):
+    """post_write pass + consistency high + iter<MAX → loop to chapter_design (无 commit)."""
+    from app.graphs import write_long as wl
+
+    class _FakeChecker:
+        def __init__(self, factory): pass
+        async def check(self, *, outline, prose):
+            return {"severity": "high", "recommendation": "redo",
+                    "deviation_score": 0.8, "issues": ["未兑现 beats[1]"]}
+
+    class _FakeTracking:
+        def __init__(self, session): pass
+        async def commit(self, *a, **kw): raise AssertionError("不应 commit")
+
+    monkeypatch.setattr(wl, "build_prose_consistency_checker", lambda f: _FakeChecker(f))
+    monkeypatch.setattr(wl, "TrackingService", _FakeTracking)
+
+    state = _make_state()
+    import asyncio
+    result = asyncio.run(wl.validate_prose_node(state, session=None, llm_factory=None))
+    # 无 commit
+    assert "chapter_id" not in result
+    # design_iteration 自增
+    assert result["design_iteration"] == 1
+    stage_names = [s["name"] for s in result["stages"]]
+    assert "validate_prose" in stage_names
+    assert "tracking_commit" not in stage_names
+
+
+def test_validate_prose_consistency_high_overflow_human_review_commits_with_interrupt(monkeypatch):
+    """post_write pass + consistency high + iter≥MAX + human_review → commit + interrupt_pending."""
+    from app.graphs import write_long as wl
+
+    class _FakeChecker:
+        def __init__(self, factory): pass
+        async def check(self, *, outline, prose):
+            return {"severity": "high", "recommendation": "human_review",
+                    "deviation_score": 0.9, "issues": ["重大偏离"]}
+
+    class _FakeSnap:
+        chapter_id = 88
+        state_revision = 6
+        final_wordcount = 800
+
+    class _FakeTracking:
+        def __init__(self, session): pass
+        async def commit(self, project_id, tx):
+            return _FakeSnap()
+
+    monkeypatch.setattr(wl, "build_prose_consistency_checker", lambda f: _FakeChecker(f))
+    monkeypatch.setattr(wl, "TrackingService", _FakeTracking)
+
+    state = _make_state()
+    state["design_iteration"] = wl.MAX_DESIGN_ITERATIONS + 1  # 已超限
+    import asyncio
+    result = asyncio.run(wl.validate_prose_node(state, session=None, llm_factory=None))
+    # commit 了
+    assert result["chapter_id"] == 88
+    # interrupt_pending 被设
+    assert result["interrupt_pending"] is True
+    assert "interrupt_reason" in result
+    # stages 包含 interrupt_human
+    stage_names = [s["name"] for s in result["stages"]]
+    assert "interrupt_human" in stage_names
+    assert "tracking_commit" in stage_names
+
+
+def test_validate_prose_consistency_high_overflow_non_human_commits_without_interrupt(monkeypatch):
+    """post_write pass + consistency high + iter≥MAX + redo → commit + 不 interrupt."""
+    from app.graphs import write_long as wl
+
+    class _FakeChecker:
+        def __init__(self, factory): pass
+        async def check(self, *, outline, prose):
+            return {"severity": "high", "recommendation": "redo",
+                    "deviation_score": 0.9, "issues": ["偏离"]}
+
+    class _FakeSnap:
+        chapter_id = 99
+        state_revision = 7
+        final_wordcount = 700
+
+    class _FakeTracking:
+        def __init__(self, session): pass
+        async def commit(self, project_id, tx):
+            return _FakeSnap()
+
+    monkeypatch.setattr(wl, "build_prose_consistency_checker", lambda f: _FakeChecker(f))
+    monkeypatch.setattr(wl, "TrackingService", _FakeTracking)
+
+    state = _make_state()
+    state["design_iteration"] = wl.MAX_DESIGN_ITERATIONS + 1
+    import asyncio
+    result = asyncio.run(wl.validate_prose_node(state, session=None, llm_factory=None))
+    assert result["chapter_id"] == 99
+    assert "interrupt_pending" not in result
+    # notice 应包含 "best-effort"
+    assert "best-effort" in result.get("notice", "")
+
+
+def test_validate_prose_post_write_fail_overflow_commits(monkeypatch):
+    """post_write fail + iter≥MAX → commit (best-effort)，跳过 consistency."""
+    from app.graphs import write_long as wl
+
+    class _FakeChecker:
+        def __init__(self, factory): pass
+        async def check(self, *, outline, prose):
+            raise AssertionError("不应调 consistency (post_write fail → best-effort)")
+
+    class _FakeSnap:
+        chapter_id = 55
+        state_revision = 3
+        final_wordcount = 100
+
+    class _FakeTracking:
+        def __init__(self, session): pass
+        async def commit(self, project_id, tx):
+            return _FakeSnap()
+
+    monkeypatch.setattr(wl, "build_prose_consistency_checker", lambda f: _FakeChecker(f))
+    monkeypatch.setattr(wl, "TrackingService", _FakeTracking)
+
+    prose = "综上所述" + "短" * 30  # 必败
+    state = _make_state(body=prose)
+    state["design_iteration"] = wl.MAX_DESIGN_ITERATIONS + 1
+    import asyncio
+    result = asyncio.run(wl.validate_prose_node(state, session=None, llm_factory=None))
+    assert result["chapter_id"] == 55
+    assert "post_write" in result.get("notice", "")
+    assert "consistency_report" not in result  # 未跑 consistency
 
 
 # ===========================================================================

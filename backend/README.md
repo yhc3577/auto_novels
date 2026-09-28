@@ -64,42 +64,47 @@ backend/app/
 | `TrackingService` | `tracking.py` | 业务 — 原子事务落库（chapters + chapter_records） |
 | `ChapterService` | `chapter.py` | 业务 — 章节读侧 |
 
-## 3. write_long 图（7 节点 设计-写作-校验 闭环）
+## 3. write_long 图（4 节点 精简设计-写作-校验闭环）
 
 ```
 chapter_design (LLM)
        ↓
-pre_write_validate (服务)
-       ├─ pass ─────────────────────────────→ write_prose
+pre_write_validate (服务，路由点)
+       ├─ pass ──────────────────────────→ write_prose
        └─ fail + retry<MAX → chapter_design (loop)
        └─ fail + retry≥MAX → write_prose (best-effort)
        ↓
 write_prose (LLM)
        ↓
-post_write_check (服务，6 项门禁)
-       ├─ pass ─────────────────────────────→ prose_consistency
-       └─ fail + iter<MAX → write_prose (loop)
-       └─ fail + iter≥MAX → prose_consistency (best-effort)
-       ↓
-prose_consistency (LLM 轻校验，剧情一致性)
-       ├─ low/medium severity ──────────────→ tracking_commit
-       └─ high severity:
-           ├─ iter<MAX → chapter_design (full redo)
-           └─ iter≥MAX:
-               ├─ LLM 推荐 human_review → interrupt_human → END
-               └─ 其他 → tracking_commit (best-effort)
-       ↓
-tracking_commit (服务，原子 DB 事务)
-       ↓
-       END
+validate_prose (合并节点：post_write_check + prose_consistency + tracking_commit + interrupt_human)
+       ├─ post_write fail + iter<MAX ────→ write_prose (loop，无 commit)
+       ├─ post_write fail + iter≥MAX ────→ commit (best-effort) → END
+       ├─ post_write pass + consistency low/medium ──→ commit → END
+       ├─ post_write pass + consistency high + iter<MAX ──→ chapter_design (loop)
+       └─ post_write pass + consistency high + iter≥MAX:
+           ├─ LLM 推荐 human_review → commit + interrupt_pending → END
+           └─ 其他推荐 → commit (best-effort) → END
 ```
 
 ### 节点性质分类
 
 | 性质 | 节点 |
 |------|------|
-| **LLM agent**（3） | `chapter_design`, `write_prose`, `prose_consistency` |
-| **服务节点**（4） | `pre_write_validate`, `post_write_check`, `interrupt_human`, `tracking_commit` |
+| **LLM agent**（2） | `chapter_design`, `write_prose` |
+| **服务节点**（2） | `pre_write_validate`, `validate_prose`（合并节点） |
+
+> **简化动机**：7 节点图中 `post_write_check` / `prose_consistency` / `tracking_commit` / `interrupt_human` 4 个节点被合并为 `validate_prose`。路由决策点全部内化到节点函数内，不再依赖多组条件边。
+
+### validate_prose 决策矩阵
+
+| post_write | consistency | iter | action |
+|-----------|-------------|------|--------|
+| fail | (skipped) | <MAX | loop to `write_prose`（无 commit）|
+| fail | (skipped) | ≥MAX | commit（best-effort）|
+| pass | low / medium | any | commit（clean pass）|
+| pass | high | <MAX | loop to `chapter_design`（无 commit）|
+| pass | high + `human_review` | ≥MAX | commit + `interrupt_pending` |
+| pass | high + other | ≥MAX | commit (best-effort) |
 
 ### 闭环控制参数
 
@@ -125,14 +130,14 @@ MAX_DESIGN_ITERATIONS = 1   # prose_consistency 严重偏离时 chapter_design �
 
 ### prose_consistency 的三路分支
 
-LLM 返回 `deviation_score` + `severity` + `recommendation`，路由决策：
+LLM 返回 `deviation_score` + `severity` + `recommendation`，路由决策（在 `validate_prose` 节点内部）：
 
 | severity | iter | recommendation | → |
 |---------|------|----------------|---|
-| low / medium | 任意 | 任意 | `tracking_commit` (放行) |
+| low / medium | 任意 | 任意 | `commit`（放行）|
 | high | < MAX | 任意 | `chapter_design` (full redo) |
-| high | ≥ MAX | `human_review` | `interrupt_human` → END |
-| high | ≥ MAX | 其他 | `tracking_commit` (best-effort) |
+| high | ≥ MAX | `human_review` | `commit` + `interrupt_pending`（人在环）|
+| high | ≥ MAX | 其他 | `commit` (best-effort) |
 
 ## 4. write_short 图（4 节点，最薄版）
 
@@ -149,11 +154,11 @@ route_scenario → write_prose → wordcount_checkpoint → tracking_commit → 
 pytest -q
 ```
 
-测试覆盖（70+ 用例）：
+测试覆盖（80+ 用例）：
 - `WordcountService`（CJK / ASCII / 混合 / checkpoint 通过/失败）
 - `OutlineValidator` / `OutlinePreValidator` / `ProsePostChecker`（规则工具）
 - `ChapterDesigner` / `ProseConsistencyChecker`（LLM agent 的 JSON 解析 + fallback）
-- **write_long 图**：节点存在性、3 组条件边、3 组 routing 决策
+- **write_long 图**：节点存在性、2 组条件边、2 组 routing 决策 + validate_prose 6 路分支端到端
 - **铁律**：agent / graphs 不能 import `repository` / `models`（AST 扫描守）
 
 ## 6. 切换真实 LLM
