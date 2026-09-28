@@ -21,8 +21,15 @@ api.interceptors.request.use((config) => {
 api.interceptors.response.use(
   (response) => response,
   (error) => {
-    // 当前后端暂无 auth，401 只在特殊路由上有效；这里仅清理 token，不强跳 login
-    // （避免接口未实现时登录页↔首页循环跳转）
+    if (error.response?.status === 401) {
+      // token 过期 / 失败 → 清理并跳登录
+      localStorage.removeItem('token')
+      localStorage.removeItem('userId')
+      localStorage.removeItem('username')
+      if (window.location.pathname !== '/login') {
+        window.location.href = '/login'
+      }
+    }
     return Promise.reject(error)
   }
 )

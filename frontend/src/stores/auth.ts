@@ -1,28 +1,35 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
+import api from '@/services/api'
 
 export const useAuthStore = defineStore('auth', () => {
   const token = ref(localStorage.getItem('token') || '')
   const userId = ref(localStorage.getItem('userId') || '')
   const username = ref(localStorage.getItem('username') || '')
 
-  function persistUser(data: { token: string; id?: string; username?: string }) {
+  function persistUser(data: { token: string; user_id?: string | number; username?: string }) {
     token.value = data.token
-    if (data.id) userId.value = data.id
+    if (data.user_id !== undefined) userId.value = String(data.user_id)
     if (data.username) username.value = data.username
     localStorage.setItem('token', data.token)
     localStorage.setItem('userId', userId.value)
     localStorage.setItem('username', username.value)
   }
 
-  async function register(user: string, _pass: string) {
-    // 当前后端暂无 /auth/* 端点 → mock 直接成功
-    persistUser({ token: 'mock-token-' + Date.now(), id: '1', username: user })
+  async function register(user: string, pass: string) {
+    const { data } = await api.post('/auth/register', {
+      username: user,
+      password: pass
+    })
+    persistUser(data)
   }
 
-  async function login(user: string, _pass: string) {
-    // 当前后端暂无 /auth/* 端点 → mock 直接成功
-    persistUser({ token: 'mock-token-' + Date.now(), id: '1', username: user })
+  async function login(user: string, pass: string) {
+    const { data } = await api.post('/auth/login', {
+      username: user,
+      password: pass
+    })
+    persistUser(data)
   }
 
   function logout() {

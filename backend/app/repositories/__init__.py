@@ -8,5 +8,11 @@
 
 from app.repositories.chapter import ChapterRecordRepository, ChapterRepository
 from app.repositories.project import ProjectRepository
+from app.repositories.user import UserRepository
 
-__all__ = ["ProjectRepository", "ChapterRepository", "ChapterRecordRepository"]
+__all__ = [
+    "ProjectRepository",
+    "ChapterRepository",
+    "ChapterRecordRepository",
+    "UserRepository",
+]

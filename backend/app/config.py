@@ -52,6 +52,15 @@ class Settings(BaseSettings):
     app_port: int = 8082
     cors_origins: str = "http://localhost:5173,http://localhost:8080"
 
+    # ----- Auth -----
+    # JWT 签名密钥 (生产环境必须用强随机字符串通过 env 注入)
+    jwt_secret: str = Field(
+        default="dev-secret-do-not-use-in-prod-XXXXXXXXXXXXXXXX",
+        description="HS256 签名密钥，生产环境务必覆盖",
+    )
+    jwt_algorithm: str = "HS256"
+    jwt_expire_minutes: int = Field(default=60 * 24 * 7, ge=60)  # 默认 7 天
+
     # ----- Logging -----
     log_level: str = "INFO"
 

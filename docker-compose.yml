@@ -20,13 +20,17 @@ services:
       POSTGRES_DB: auto_novels
     volumes:
       - pgdata:/var/lib/postgresql/data
-      - ./docs/schema-pg-v0.1.sql:/docker-entrypoint-initdb.d/01-schema-v0.1.sql:ro
-      - ./docs/schema-pg-v0.2.sql:/docker-entrypoint-initdb.d/02-schema-v0.2.sql:ro
+      # schema SQL 已被 backend/scripts/init_db.py 的 SQLAlchemy create_all 取代
+      # （ORM 定义才是唯一 schema 源）。如需重启用 Alembic 迁移。
+      # - ./docs/schema-pg-v0.1.sql:/docker-entrypoint-initdb.d/01-schema-v0.1.sql:ro
+      # - ./docs/schema-pg-v0.2.sql:/docker-entrypoint-initdb.d/02-schema-v0.2.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d auto_novels"]
       interval: 3s
       timeout: 3s
       retries: 20
+    ports:
+      - "127.0.0.1:5432:5432"   # 供 backend 在宿主机上连（localhost:5432）
     networks: [internal]
 
   backend:

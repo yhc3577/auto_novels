@@ -36,6 +36,11 @@ class ConflictError(DomainError):
     code = "conflict"
 
 
+class AuthenticationError(DomainError):
+    status_code = 401
+    code = "authentication_error"
+
+
 def register_error_handlers(app: FastAPI) -> None:
     @app.exception_handler(DomainError)
     async def _domain_error_handler(_: Request, exc: DomainError) -> JSONResponse:

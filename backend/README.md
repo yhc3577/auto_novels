@@ -14,13 +14,32 @@ docker compose up -d postgres
 # 装依赖 + 启 API
 cp .env.example .env
 pip install -e ".[dev]"
+
+# 一次性初始化 DB schema (创建 projects / chapters / chapter_records / users 表)
+PYTHONPATH=. .venv/bin/python -m scripts.init_db
+
+# 启 API
 uvicorn app.main:app --host 0.0.0.0 --port 8082 --reload
 ```
+
+JWT 密钥（默认 dev 占位）：生产环境务必设 `JWT_SECRET=<strong-random>` env 变量覆盖。
 
 访问：
 
 - Swagger: <http://localhost:8082/docs>
 - Healthz: <http://localhost:8082/api/healthz>
+
+## 1.1 Auth 端点
+
+| 端点 | 方法 | 说明 |
+|------|------|------|
+| `/api/auth/register` | POST | 用户名 + 密码注册，返 JWT token (HS256, 7 天过期) |
+| `/api/auth/login` | POST | 用户名 + 密码登录，返 JWT token |
+
+请求体：`{"username": "...", "password": "..."}`
+响应：`{"token": "eyJ...", "user_id": 1, "username": "...", "created_at": "..."}`
+
+存储：bcrypt 哈希（cost=12），密码限 72 字节。
 
 ## 2. 目录速查（5 层 + 横向）
 

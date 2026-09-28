@@ -8,7 +8,7 @@ from collections.abc import AsyncIterator
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import healthz_router, intent_router_router, projects_router, write_router
+from app.api import auth_router, healthz_router, intent_router_router, projects_router, write_router
 from app.config import settings
 from app.db import dispose_engine, get_engine
 from app.errors import register_error_handlers
@@ -49,6 +49,7 @@ def create_app() -> FastAPI:
     )
 
     register_error_handlers(app)
+    app.include_router(auth_router)
     app.include_router(healthz_router)
     app.include_router(projects_router)
     app.include_router(write_router)

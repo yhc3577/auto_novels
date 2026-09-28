@@ -6,12 +6,14 @@
 - 不感知 ORM 模型细节（转 DTO）
 """
 
+from app.api.auth import router as auth_router
 from app.api.healthz import router as healthz_router
 from app.api.projects import router as projects_router
 from app.api.router import router as intent_router_router
 from app.api.write import router as write_router
 
 __all__ = [
+    "auth_router",
     "healthz_router",
     "projects_router",
     "write_router",
