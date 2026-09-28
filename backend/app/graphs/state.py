@@ -73,6 +73,7 @@ class StoryState(TypedDict, total=False):
     # ----- project -----
     project_id: int
     project_slug: str
+    user_id: int                                  # owner — graph 节点可见，写入 owner-scoped 表时用
 
     # ----- intent / dispatch -----
     intent: str

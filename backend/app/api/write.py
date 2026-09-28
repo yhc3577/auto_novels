@@ -19,9 +19,10 @@ router = APIRouter(prefix="/api/write", tags=["write"])
 
 @router.post("", response_model=WriteResponse)
 async def write_chapter(
-    payload: WriteRequest, session: SessionDep, _user: CurrentUserDep
+    payload: WriteRequest, session: SessionDep, user: CurrentUserDep
 ) -> WriteResponse:
-    project = await ProjectRepository(session).get(payload.project_id)
+    # ownership check: 别人的 project → 404
+    project = await ProjectRepository(session).get(payload.project_id, user_id=user.id)
 
     deps = {
         "session": session,
@@ -31,6 +32,7 @@ async def write_chapter(
 
     initial_state = {
         "project_id": payload.project_id,
+        "user_id": user.id,  # 注入到 state 供后续节点 / 服务使用
         "chapter_no": payload.chapter_no,
         "user_input": payload.user_input,
         "target_wordcount": payload.target_wordcount,

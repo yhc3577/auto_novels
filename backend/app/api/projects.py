@@ -29,7 +29,7 @@ def _to_out(p, chapter_count: int) -> ProjectOut:
 
 @router.post("", response_model=ProjectOut, status_code=status.HTTP_201_CREATED)
 async def create_project(
-    payload: ProjectCreate, session: SessionDep, _user: CurrentUserDep
+    payload: ProjectCreate, session: SessionDep, user: CurrentUserDep
 ) -> ProjectOut:
     repo = ProjectRepository(session)
     project = await repo.create(
@@ -37,6 +37,7 @@ async def create_project(
         title=payload.title,
         genre=payload.genre,
         platform=payload.platform,
+        user_id=user.id,
     )
     await session.flush()
     return _to_out(project, chapter_count=0)
@@ -44,11 +45,11 @@ async def create_project(
 
 @router.get("", response_model=list[ProjectOut])
 async def list_projects(
-    session: SessionDep, _user: CurrentUserDep, limit: int = 50, offset: int = 0
+    session: SessionDep, user: CurrentUserDep, limit: int = 50, offset: int = 0
 ) -> list[ProjectOut]:
+    """只列出当前 user 的项目（不返别人的）."""
     repo = ProjectRepository(session)
-    projects = await repo.list_all(limit=limit, offset=offset)
-    # 批量查每个项目的章节数
+    projects = await repo.list_for_user(user_id=user.id, limit=limit, offset=offset)
     if not projects:
         return []
     from sqlalchemy import func as sqlfunc
@@ -64,10 +65,11 @@ async def list_projects(
 
 @router.get("/{project_id}", response_model=ProjectOut)
 async def get_project(
-    project_id: int, session: SessionDep, _user: CurrentUserDep
+    project_id: int, session: SessionDep, user: CurrentUserDep
 ) -> ProjectOut:
+    """别人的项目 → 404 NotFoundError（不暴露存在性）."""
     repo = ProjectRepository(session)
-    project = await repo.get(project_id)
+    project = await repo.get(project_id, user_id=user.id)
     from sqlalchemy import func as sqlfunc
 
     stmt = select(sqlfunc.count(Chapter.id)).where(Chapter.project_id == project_id)

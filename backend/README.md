@@ -29,17 +29,37 @@ JWT 密钥（默认 dev 占位）：生产环境务必设 `JWT_SECRET=<strong-ra
 - Swagger: <http://localhost:8082/docs>
 - Healthz: <http://localhost:8082/api/healthz>
 
-## 1.1 Auth 端点
+## 1.1 Auth 端点 + User-scoped 隔离
 
-| 端点 | 方法 | 需要鉴权 | 说明 |
-|------|------|---------|------|
-| `/api/auth/register` | POST | ❌ | 用户名 + 密码注册，返 JWT token (HS256, 7 天过期) |
-| `/api/auth/login` | POST | ❌ | 用户名 + 密码登录，返 JWT token |
-| `/api/auth/me` | GET | ✅ | 验证 token 还有效，返当前 user |
-| `/api/healthz` | GET | ❌ | 健康检查（监控系统用）|
-| `/api/projects` | * | ✅ | 项目 CRUD（list / get / create）|
-| `/api/write` | POST | ✅ | 触发 write_long 图 |
-| `/api/router` | POST | ✅ | 统一意图识别入口 |
+### 端点
+
+| 端点 | 方法 | 需要鉴权 | Owner 检查 | 说明 |
+|------|------|---------|-----------|------|
+| `/api/auth/register` | POST | ❌ | – | 用户名 + 密码注册，返 JWT token (HS256, 7 天过期) |
+| `/api/auth/login` | POST | ❌ | – | 用户名 + 密码登录，返 JWT token |
+| `/api/auth/me` | GET | ✅ | – | 验证 token 还有效，返当前 user |
+| `/api/healthz` | GET | ❌ | – | 健康检查（监控系统用）|
+| `/api/projects` | POST/GET | ✅ | ✓ | 项目 CRUD（list/get/create 全部 scope 到当前 user）|
+| `/api/projects/{id}` | GET | ✅ | ✓ | 取自己的项目；别人的项目 404 |
+| `/api/write` | POST | ✅ | ✓ | 触发 write_long；只能写自己的项目 |
+| `/api/router` | POST | ✅ | ✓ | 统一意图识别；只能走自己的项目 |
+
+### User-scoped 设计
+
+- **`projects.user_id`** FK → `users.id`，`ON DELETE CASCADE`
+- **`UniqueConstraint("user_id", "slug")`** composite unique —— 两个用户可以同名 slug
+- 所有 repository 查询默认按 `user_id` 过滤；`get(project_id, *, user_id)` 未传 `user_id` 会报错（强制检查）
+- 别人的项目 → `NotFoundError(404)`（不返 403，避免 ID 枚举）
+
+### 数据迁移
+
+`projects` 表变了 (加了 `user_id` + composite unique)，需重 init：
+
+```bash
+cd backend && PYTHONPATH=. .venv/bin/python -m scripts.init_db
+```
+
+⚠️ **会丢现有项目数据**（dev only；生产上需要 Alembic 迁移 + 回填 `user_id`）
 
 请求体：`{"username": "...", "password": "..."}`
 响应：`{"token": "eyJ...", "user_id": 1, "username": "...", "created_at": "..."}`

@@ -358,3 +358,155 @@ def test_api_auth_login_does_not_require_auth(client: TestClient):
     # 但实际 response body 不一样。
     assert r.status_code == 401
     assert "invalid username or password" in r.json()["error"]["message"]
+
+
+# ===========================================================================
+# User-scoped 隔离 — user A 看不到 / 动不了 user B 的资源
+# ===========================================================================
+
+
+def _register_user(client: TestClient, uname: str, pwd: str = "secret123") -> tuple[str, int]:
+    r = client.post(
+        "/api/auth/register",
+        json={"username": uname, "password": pwd},
+    )
+    assert r.status_code == 201, r.text
+    return r.json()["token"], r.json()["user_id"]
+
+
+def _create_project(client: TestClient, token: str, slug: str, title: str = "T") -> int:
+    r = client.post(
+        "/api/projects",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"slug": slug, "title": title},
+    )
+    assert r.status_code == 201, r.text
+    return r.json()["id"]
+
+
+def test_user_scoped_list_only_returns_own_projects(client: TestClient):
+    """user A 列出项目时，user B 的项目不应出现."""
+    import uuid
+    suf = uuid.uuid4().hex[:6]
+    token_a, _ = _register_user(client, f"alice_{suf}")
+    token_b, _ = _register_user(client, f"bob_{suf}")
+    proj_a = _create_project(client, token_a, f"alice-proj-{suf}", "Alice's book")
+    proj_b = _create_project(client, token_b, f"bob-proj-{suf}", "Bob's book")
+
+    # Alice list 只返自己的
+    r = client.get("/api/projects", headers={"Authorization": f"Bearer {token_a}"})
+    assert r.status_code == 200
+    ids = [p["id"] for p in r.json()]
+    assert proj_a in ids
+    assert proj_b not in ids
+
+    # Bob list 只返自己的
+    r = client.get("/api/projects", headers={"Authorization": f"Bearer {token_b}"})
+    assert r.status_code == 200
+    ids = [p["id"] for p in r.json()]
+    assert proj_b in ids
+    assert proj_a not in ids
+
+
+def test_user_scoped_get_other_users_project_returns_404(client: TestClient):
+    """user A get user B 的 project → 404（不暴露存在性）."""
+    import uuid
+    suf = uuid.uuid4().hex[:6]
+    token_a, _ = _register_user(client, f"getter_{suf}")
+    token_b, _ = _register_user(client, f"owner_{suf}")
+    proj_b = _create_project(client, token_b, f"secret-{suf}", "secret")
+
+    r = client.get(
+        f"/api/projects/{proj_b}",
+        headers={"Authorization": f"Bearer {token_a}"},
+    )
+    assert r.status_code == 404
+    assert r.json()["error"]["code"] == "not_found"
+
+
+def test_user_scoped_same_slug_for_different_users_ok(client: TestClient):
+    """两个 user 可以同名 slug — composite unique (user_id, slug)."""
+    import uuid
+    suf = uuid.uuid4().hex[:6]
+    token_a, _ = _register_user(client, f"ua_{suf}")
+    token_b, _ = _register_user(client, f"ub_{suf}")
+    slug = f"shared-slug-{suf}"
+
+    # Alice 建
+    r1 = client.post(
+        "/api/projects",
+        headers={"Authorization": f"Bearer {token_a}"},
+        json={"slug": slug, "title": "A's"},
+    )
+    assert r1.status_code == 201, r1.text
+
+    # Bob 也能建同名
+    r2 = client.post(
+        "/api/projects",
+        headers={"Authorization": f"Bearer {token_b}"},
+        json={"slug": slug, "title": "B's"},
+    )
+    assert r2.status_code == 201, r2.text
+    assert r1.json()["id"] != r2.json()["id"]
+
+
+def test_user_scoped_same_slug_same_user_409(client: TestClient):
+    """同一 user 重复 slug → 409."""
+    import uuid
+    suf = uuid.uuid4().hex[:6]
+    token, _ = _register_user(client, f"dup_{suf}")
+    slug = f"same-{suf}"
+
+    r1 = client.post(
+        "/api/projects",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"slug": slug, "title": "1st"},
+    )
+    assert r1.status_code == 201
+
+    r2 = client.post(
+        "/api/projects",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"slug": slug, "title": "2nd"},
+    )
+    assert r2.status_code == 409
+
+
+def test_user_scoped_write_other_users_project_404(client: TestClient):
+    """user A 调 /api/write 写 user B 的 project → 404."""
+    import uuid
+    suf = uuid.uuid4().hex[:6]
+    token_a, _ = _register_user(client, f"writer_{suf}")
+    token_b, _ = _register_user(client, f"target_{suf}")
+    proj_b = _create_project(client, token_b, f"target-{suf}", "T")
+
+    r = client.post(
+        "/api/write",
+        headers={"Authorization": f"Bearer {token_a}"},
+        json={
+            "project_id": proj_b,
+            "user_input": "写第 1 章",
+            "target_wordcount": 500,
+        },
+    )
+    assert r.status_code == 404
+
+
+def test_user_scoped_router_other_users_project_404(client: TestClient):
+    """user A 调 /api/router 走 user B 的 project → 404."""
+    import uuid
+    suf = uuid.uuid4().hex[:6]
+    token_a, _ = _register_user(client, f"router_{suf}")
+    token_b, _ = _register_user(client, f"target2_{suf}")
+    proj_b = _create_project(client, token_b, f"router-target-{suf}", "T")
+
+    r = client.post(
+        "/api/router",
+        headers={"Authorization": f"Bearer {token_a}"},
+        json={
+            "project_id": proj_b,
+            "user_input": "x",
+            "explicit_scenario": "auto",
+        },
+    )
+    assert r.status_code == 404

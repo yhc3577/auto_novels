@@ -16,10 +16,10 @@ router = APIRouter(prefix="/api/router", tags=["router"])
 
 @router.post("", response_model=RouterResponse)
 async def invoke_router(
-    payload: RouterRequest, session: SessionDep, _user: CurrentUserDep
+    payload: RouterRequest, session: SessionDep, user: CurrentUserDep
 ) -> RouterResponse:
-    # 校验项目存在
-    project = await ProjectRepository(session).get(payload.project_id)
+    # ownership check: 别人的 project → 404
+    project = await ProjectRepository(session).get(payload.project_id, user_id=user.id)
 
     deps = {
         "session": session,
@@ -29,6 +29,7 @@ async def invoke_router(
 
     initial_state = {
         "project_id": payload.project_id,
+        "user_id": user.id,  # 注入到 state
         "user_input": payload.user_input,
         "explicit_scenario": payload.explicit_scenario or "auto",
         "stages": [],
