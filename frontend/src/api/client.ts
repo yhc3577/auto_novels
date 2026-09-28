@@ -2,7 +2,7 @@
 
 const base = '/api'
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const r = await fetch(base + path, {
     headers: { 'Content-Type': 'application/json' },
     ...init,
